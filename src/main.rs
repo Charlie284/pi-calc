@@ -1,5 +1,5 @@
-use rug::{Float, Integer};
 use rug::ops::Pow;
+use rug::{Float, Integer};
 use std::env;
 use std::process;
 use std::time::Instant;
@@ -18,7 +18,7 @@ ARGS:
   <DIGITS>    Number of decimal digits to compute (default: 1000, max: 100_000_000)
 
 The Chudnovsky algorithm is used. Each digit costs ~log2(10) approx 3.32 bits.
-10,000 digits in ~30ms, 1,000,000 in ~5 minutes on modern hardware.
+Runtime depends heavily on precision, hardware, and the GMP/MPFR build.
 ";
 
 fn parse_args() -> (u32, bool) {
@@ -77,9 +77,9 @@ fn main() {
 
     let c = Float::with_val(precision, 426880) * Float::with_val(precision, 10005).sqrt();
 
-    let mut a = Integer::from(1);        // (6k)! / ((3k)! * (k!)^3)
+    let mut a = Integer::from(1); // (6k)! / ((3k)! * (k!)^3)
     let mut b = Integer::from(13591409); // 13591409 + 545140134k
-    let mut t = Integer::from(1);        // (-640320)^(3k)
+    let mut t = Integer::from(1); // (-640320)^(3k)
 
     let mut sum = Float::with_val(precision, 13591409);
 

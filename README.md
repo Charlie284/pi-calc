@@ -1,8 +1,8 @@
 # pi-calc
 
-A very fast pi calculator using the Chudnovsky algorithm. Written in Rust.
+A fast pi calculator using the Chudnovsky algorithm. Written in Rust.
 
-Computes pi to arbitrary precision. 1,000 digits in ~124us, 10,000 in ~33ms, 100,000 in ~3s.
+Computes pi to arbitrary precision with an explicit upper bound of 100,000,000 decimal digits.
 
 ## Usage
 
@@ -30,12 +30,16 @@ The implementation uses GMP (via the `rug` crate) for arbitrary-precision intege
 
 ## Performance
 
-| Digits | Time      | Iterations |
-|--------|-----------|------------|
-| 100    | 37 us     | 10         |
-| 1,000  | 124 us    | 73         |
-| 10,000 | 33 ms     | 708        |
-| 100,000| ~3 s      | 7,052      |
+Runtime depends on the requested precision, CPU, Rust toolchain, and GMP/MPFR build. An illustrative
+single warm run on an Apple M4 Max with Rust 1.96.1 took about 0.04 seconds for 10,000 digits and
+10.5 seconds for 100,000 digits. These are observations, not cross-machine guarantees.
+
+To measure the release build on your machine without including terminal output time:
+
+```sh
+cargo build --release
+/usr/bin/time -p target/release/pi-calc --quiet 100000 > /dev/null
+```
 
 ## Build
 
@@ -46,6 +50,15 @@ Requires Rust 1.75+ and GMP/MPFR dev libraries.
 sudo apt install libgmp-dev libmpfr-dev libmpc-dev
 
 cargo build --release
+```
+
+## Test
+
+The integration suite verifies output digits and CLI error handling:
+
+```sh
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ## License
