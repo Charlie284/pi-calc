@@ -1,4 +1,3 @@
-use rug::ops::Pow;
 use rug::{Float, Integer};
 use std::env;
 use std::process;
@@ -64,6 +63,32 @@ fn parse_args() -> (u32, bool) {
     (digits.unwrap_or(1_000), quiet)
 }
 
+/// 640320^3 / 24
+const C3_OVER_24: u64 = 10_939_058_860_032_000;
+
+/// Returns (P, Q, T) for Chudnovsky terms in [a, b).
+fn binary_split(a: u64, b: u64) -> (Integer, Integer, Integer) {
+    if b - a == 1 {
+        let (p, q) = if a == 0 {
+            (Integer::from(1), Integer::from(1))
+        } else {
+            let p = Integer::from(6 * a - 5) * (2 * a - 1) * (6 * a - 1);
+            let q = Integer::from(a) * a * a * C3_OVER_24;
+            (p, q)
+        };
+        let mut t = Integer::from(&p * (Integer::from(545_140_134u64) * a + 13_591_409u64));
+        if a % 2 == 1 {
+            t = -t;
+        }
+        return (p, q, t);
+    }
+    let m = (a + b) / 2;
+    let (pam, qam, tam) = binary_split(a, m);
+    let (pmb, qmb, tmb) = binary_split(m, b);
+    let t = Integer::from(&tam * &qmb) + Integer::from(&pam * &tmb);
+    (pam * pmb, qam * qmb, t)
+}
+
 fn main() {
     let (digits, quiet) = parse_args();
 
@@ -75,45 +100,14 @@ fn main() {
     // Chudnovsky algorithm: pi = 426880*sqrt(10005) / K
     // K = sum (6k)! (13591409 + 545140134k) / ((3k)! (k)!^3 (-640320)^(3k))
 
-    let c = Float::with_val(precision, 426880) * Float::with_val(precision, 10005).sqrt();
-
-    let mut a = Integer::from(1); // (6k)! / ((3k)! * (k!)^3)
-    let mut b = Integer::from(13591409); // 13591409 + 545140134k
-    let mut t = Integer::from(1); // (-640320)^(3k)
-
-    let mut sum = Float::with_val(precision, 13591409);
-
     // Each Chudnovsky term gives ~14.181 digits
     let limit = (digits as f64 / 14.181).ceil() as u32 + 2;
 
-    for i in 1..=limit {
-        let k: u64 = i.into();
+    // Binary splitting: sum all terms with exact integers, then divide once.
+    let (_, q, t) = binary_split(0, u64::from(limit) + 1);
 
-        // Recurrence for a_k = (6k)! / ((3k)! * (k!)^3)
-        let six_k = Integer::from(6 * k);
-        let six_k_minus_1 = Integer::from(6 * k - 1);
-        let six_k_minus_2 = Integer::from(6 * k - 2);
-        let six_k_minus_3 = Integer::from(6 * k - 3);
-        let six_k_minus_4 = Integer::from(6 * k - 4);
-        let six_k_minus_5 = Integer::from(6 * k - 5);
-
-        let three_k = Integer::from(3 * k);
-        let three_k_minus_1 = Integer::from(3 * k - 1);
-        let three_k_minus_2 = Integer::from(3 * k - 2);
-        let k_cubed = Integer::from(k).pow(3);
-
-        a *= six_k_minus_5 * six_k_minus_4 * six_k_minus_3 * six_k_minus_2 * six_k_minus_1 * six_k;
-        a /= three_k_minus_2 * three_k_minus_1 * three_k * k_cubed;
-
-        b += 545140134;
-        t *= -262537412640768000i64;
-
-        let term =
-            Float::with_val(precision, Integer::from(&a * &b)) / Float::with_val(precision, &t);
-        sum += term;
-    }
-
-    let pi = c / sum;
+    let c = Float::with_val(precision, 426880) * Float::with_val(precision, 10005).sqrt();
+    let pi = c * Float::with_val(precision, &q) / Float::with_val(precision, &t);
     let elapsed = start.elapsed();
 
     let pi_str = pi.to_string_radix(10, Some(digits as usize + 2));
