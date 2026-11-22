@@ -26,7 +26,7 @@ pi-calc -q 10000  # 10000 digits, quiet mode
 
 Uses the [Chudnovsky algorithm](https://en.wikipedia.org/wiki/Chudnovsky_algorithm), the same method used for world-record pi computations. Each iteration yields ~14.18 digits.
 
-The implementation uses GMP (via the `rug` crate) for arbitrary-precision integer and floating-point arithmetic.
+The implementation uses GMP for exact integers and MPFR for controlled-precision floating-point arithmetic through the `rug` crate. See [docs/algorithm.md](docs/algorithm.md) for the formula, integer recurrence, precision budget, and stdout/stderr contract.
 
 ## Performance
 
