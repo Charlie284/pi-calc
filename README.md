@@ -30,9 +30,14 @@ The implementation uses GMP for exact integers and MPFR for controlled-precision
 
 ## Performance
 
+The series is summed with binary splitting: the P/Q/T terms are combined as exact integers and
+only one full-precision division is performed at the end, so runtime grows roughly as
+O(n log^3 n) instead of quadratically.
+
 Runtime depends on the requested precision, CPU, Rust toolchain, and GMP/MPFR build. An illustrative
-single warm run on an Apple M4 Max with Rust 1.96.1 took about 0.04 seconds for 10,000 digits and
-10.5 seconds for 100,000 digits. These are observations, not cross-machine guarantees.
+single run on a 2-vCPU x86_64 Linux VM took about 0.03 seconds for 100,000 digits, 0.5 seconds for
+1,000,000 digits, and 9 seconds for 10,000,000 digits (about 100 MB peak memory). These are
+observations, not cross-machine guarantees.
 
 To measure the release build on your machine without including terminal output time:
 
