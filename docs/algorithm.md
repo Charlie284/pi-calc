@@ -21,42 +21,57 @@ Each term contributes about 14.181 decimal digits. `pi-calc` computes
 `ceil(digits / 14.181) + 2` terms so the requested digit count has a small
 series margin.
 
-## Exact-integer recurrence
+## Binary splitting over exact integers
 
-Factorials are never materialized directly. The code keeps the term
-coefficient
-
-\[
-a_k = \frac{(6k)!}{(3k)!(k!)^3}
-\]
-
-as a `rug::Integer` and updates it from `a_{k-1}` with only the factors that
-change between consecutive terms:
+The series is summed with binary splitting, the same technique used by
+record-setting Chudnovsky programs. For a term range \([a,b)\) the recursion
+returns a triple \((P, Q, T)\) of `rug::Integer`s with
 
 \[
-a_k = a_{k-1}\cdot
-\frac{(6k-5)(6k-4)(6k-3)(6k-2)(6k-1)(6k)}
-{(3k-2)(3k-1)(3k)k^3}.
+P = \prod_{k=a}^{b-1} p(k), \qquad
+Q = \prod_{k=a}^{b-1} q(k), \qquad
+\frac{T}{Q} = \sum_{k=a}^{b-1} (-1)^k (Ak + B)\prod_{j=a}^{k}\frac{p(j)}{q(j)},
 \]
 
-The numerator is divisible by the denominator at every step, so integer
-division is exact. The sign denominator \((-640320)^{3k}\) is also kept
-exactly and multiplied by \(-640320^3 = -262537412640768000\) per term. Each
-term is then formed as a high-precision floating-point ratio and added to the
-series sum.
+where \(A = 545140134\), \(B = 13591409\), and
+
+\[
+p(k) = (6k-5)(2k-1)(6k-1), \qquad
+q(k) = k^3\,\frac{640320^3}{24}.
+\]
+
+The ratio \(p(k)/q(k)\) is exactly the ratio of consecutive series terms
+\(T_k/T_{k-1}\) after cancelling common factors. Ranges merge with
+
+\[
+P = P_1P_2, \qquad Q = Q_1Q_2, \qquad T = T_1Q_2 + P_1T_2,
+\]
+
+so every multiplication is balanced (operands of similar size), which is what
+GMP's sub-quadratic multiplication is good at. The whole sum is therefore one
+product tree costing roughly \(O(M(n)\log n)\) instead of one full-precision
+division per term. The tree's two halves are independent, so the top few
+levels are evaluated on bounded scoped threads; the depth and the range size
+both cap the parallelism.
 
 ## Precision and output
 
-The MPFR working precision is
+All arithmetic is exact integer arithmetic. The final value is computed as
 
 \[
-\lceil d\log_2(10)\rceil + 64\text{ bits},
+\left\lfloor \pi\cdot 10^{d+g} \right\rfloor
+=
+\left\lfloor
+\frac{426880\,\left\lfloor\sqrt{10005\cdot 10^{2(d+g)}}\right\rfloor\, Q}{T}
+\right\rfloor ,
 \]
 
-where \(d\) is the requested decimal digit count. The guard bits reduce the
-effect of roundoff during summation and the final division. The decimal
-conversion requests `digits + 2` fractional characters, then the program
-prints the integer part and exactly `digits` fractional digits.
+where \(d\) is the requested digit count and \(g = 16\) guard digits absorb the
+integer-square-root truncation and the omitted series tail (each term gives
+~14.181 digits, so `ceil(digits / 14.181) + 2` terms leave a tail far below
+the guard). The program then prints the integer part and exactly `digits`
+fractional digits, truncating rather than rounding — the same contract as
+before.
 
 `--quiet` sends only the pi value to standard output. In normal mode the pi
 value is still the only standard-output payload; timing and iteration details
@@ -70,7 +85,6 @@ bound prevents accidental requests that would need infeasible memory and time.
 Large requests scale by the number of Chudnovsky terms and by arbitrary
 precision arithmetic cost, not by a simple linear relationship.
 
-The implementation is intentionally single-binary and synchronous. It uses
-[GMP](https://gmplib.org/) for exact integers and
-[MPFR](https://www.mpfr.org/) for correctly controlled floating-point
-arithmetic through the [`rug`](https://docs.rs/rug/) crate.
+The implementation is a single binary. It uses [GMP](https://gmplib.org/) for
+exact integers through the [`rug`](https://docs.rs/rug/) crate; no
+floating-point arithmetic is involved anywhere in the computation.

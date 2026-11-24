@@ -11,4 +11,4 @@ keywords = ["pi", "chudnovsky", "math", "big-number"]
 categories = ["command-line-utilities", "mathematics", "science"]
 
 [dependencies]
-rug = { version = "1.24", features = ["integer", "float"] }
+rug = { version = "1.24", features = ["integer"] }

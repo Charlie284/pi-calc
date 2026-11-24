@@ -26,13 +26,14 @@ pi-calc -q 10000  # 10000 digits, quiet mode
 
 Uses the [Chudnovsky algorithm](https://en.wikipedia.org/wiki/Chudnovsky_algorithm), the same method used for world-record pi computations. Each iteration yields ~14.18 digits.
 
-The implementation uses GMP for exact integers and MPFR for controlled-precision floating-point arithmetic through the `rug` crate. See [docs/algorithm.md](docs/algorithm.md) for the formula, integer recurrence, precision budget, and stdout/stderr contract.
+The series is summed by binary splitting over exact GMP integers (through the `rug` crate), with bounded parallelism across the top levels of the product tree. See [docs/algorithm.md](docs/algorithm.md) for the formula, the splitting recurrence, the exact-integer finalization, and the stdout/stderr contract.
 
 ## Performance
 
-Runtime depends on the requested precision, CPU, Rust toolchain, and GMP/MPFR build. An illustrative
-single warm run on an Apple M4 Max with Rust 1.96.1 took about 0.04 seconds for 10,000 digits and
-10.5 seconds for 100,000 digits. These are observations, not cross-machine guarantees.
+Runtime depends on the requested precision, CPU, Rust toolchain, and GMP build. Illustrative
+median warm runs on an Apple M4 Max with Rust 1.96.1: about 0.01 seconds for 100,000 digits,
+0.13 seconds for 1,000,000, and 3.2 seconds for 10,000,000. These are observations, not
+cross-machine guarantees.
 
 To measure the release build on your machine without including terminal output time:
 
