@@ -50,3 +50,23 @@ fn help_documents_the_supported_interface() {
     assert!(stdout.contains("pi-calc [FLAGS] [DIGITS]"));
     assert!(stdout.contains("--quiet"));
 }
+
+#[test]
+fn preserves_leading_zeros_across_a_decimal_block_boundary() {
+    let digits = 199_992;
+    let output = pi_calc()
+        .args(["--quiet", "199992"])
+        .output()
+        .expect("pi-calc should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout.len(), digits + 3);
+    let fractional = &output.stdout[2..2 + digits];
+    // The right-hand block starts with two zero digits. Values checked
+    // against MPFR's independently computed pi constant.
+    assert_eq!(&fractional[100_004..100_028], b"002437968454377733902647");
+    assert!(output
+        .stdout
+        .ends_with(b"13309702304687661585748313508014\n"));
+}

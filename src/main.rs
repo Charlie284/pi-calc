@@ -1,7 +1,13 @@
-use rug::ops::Pow;
+mod chudnovsky;
+mod decimal;
+mod factors;
+mod flint;
+
 use rug::Integer;
 use std::env;
+use std::io::{self, Write};
 use std::process;
+use std::thread;
 use std::time::Instant;
 
 const USAGE: &str = "\
@@ -20,10 +26,6 @@ ARGS:
 The Chudnovsky algorithm is used. Each digit costs ~log2(10) approx 3.32 bits.
 Runtime depends heavily on precision, hardware, and the GMP build.
 ";
-
-const A: u64 = 545_140_134;
-const B: u64 = 13_591_409;
-const C3_OVER_24: u64 = 10_939_058_860_032_000; // 640320^3 / 24
 
 fn parse_args() -> (u32, bool) {
     let args: Vec<String> = env::args().collect();
@@ -68,107 +70,48 @@ fn parse_args() -> (u32, bool) {
     (digits.unwrap_or(1_000), quiet)
 }
 
-// Binary-splitting triple for a Chudnovsky range [lo, hi):
-//   sum_{k in [lo,hi)} (-1)^k (Ak+B) prod_{j=lo..=k} p(j)/q(j) = t / q
-struct Pqt {
-    p: Integer, // product of p(j) over the range
-    q: Integer, // product of q(j) over the range
-    t: Integer, // scaled partial sum
-}
-
-fn split(lo: u32, hi: u32) -> Pqt {
-    if hi - lo == 1 {
-        let k = u64::from(lo);
-        if k == 0 {
-            return Pqt {
-                p: Integer::from(1),
-                q: Integer::from(1),
-                t: Integer::from(B),
-            };
-        }
-        // p(k) = (6k-5)(2k-1)(6k-1), q(k) = k^3 * C^3/24
-        let mut p = Integer::from(6 * k - 5);
-        p *= 2 * k - 1;
-        p *= 6 * k - 1;
-        let mut q = Integer::from(k * k);
-        q *= k;
-        q *= C3_OVER_24;
-        let mut t: Integer = (&p * (A * k + B)).into();
-        if k % 2 == 1 {
-            t = -t;
-        }
-        return Pqt { p, q, t };
-    }
-    let mid = lo + (hi - lo) / 2;
-    let l = split(lo, mid);
-    let r = split(mid, hi);
-    combine(l, r)
-}
-
-// Parallel wrapper: the two halves of the tree are independent, so the top
-// levels run on scoped threads. Bounded twice: depth caps the task count and
-// small ranges stay serial, so small requests never pay spawn overhead.
-fn split_par(lo: u32, hi: u32, depth: u32) -> Pqt {
-    if depth == 0 || hi - lo <= 256 {
-        return split(lo, hi);
-    }
-    let mid = lo + (hi - lo) / 2;
-    let (l, r) = std::thread::scope(|s| {
-        let handle = s.spawn(|| split_par(lo, mid, depth - 1));
-        let r = split_par(mid, hi, depth - 1);
-        (handle.join().expect("split thread panicked"), r)
-    });
-    combine(l, r)
-}
-
-fn combine(l: Pqt, r: Pqt) -> Pqt {
-    Pqt {
-        // fused multiply-add: t = l.t*r.q + l.p*r.t in one pass
-        t: &l.t * &r.q + Integer::from(&l.p * &r.t),
-        p: (&l.p * &r.p).into(),
-        q: (&l.q * &r.q).into(),
-    }
-}
-
-fn main() {
+fn main() -> io::Result<()> {
     let (digits, quiet) = parse_args();
-
     let start = Instant::now();
+    let workers = thread::available_parallelism().map_or(1, usize::from);
+    flint::set_workers(workers);
+    let mut guard = 16;
+    let (whole, blocks, elapsed, limit) = loop {
+        let scale = digits + 2 * guard;
+        let (pi, bits, limit) = chudnovsky::pi_fixed(scale, workers);
+        let elapsed = start.elapsed();
+        if env::var_os("PI_CALC_PROFILE").is_some() {
+            eprintln!("profile: fixed-point total {elapsed:?}");
+        }
+        let conversion_start = Instant::now();
+        let whole = Integer::from(&pi >> bits);
+        let mut blocks = decimal::convert(pi.keep_bits(bits), bits, digits + guard, workers);
+        if env::var_os("PI_CALC_PROFILE").is_some() {
+            eprintln!(
+                "profile: decimal conversion {:?}",
+                conversion_start.elapsed()
+            );
+        }
+        let last = blocks.last_mut().unwrap();
+        let end = last.len() - guard as usize;
+        let suffix = &last.as_bytes()[end..];
 
-    // Chudnovsky algorithm: pi = 426880*sqrt(10005) / S
-    // S = sum (-1)^k (6k)! (13591409 + 545140134k) / ((3k)! (k!)^3 640320^(3k))
-    // Each term gives ~14.181 digits.
-    let limit = (digits as f64 / 14.181).ceil() as u32 + 2;
+        // The fixed-point error is below two ulps. If the guard digits
+        // place the result near either truncation boundary, try more bits.
+        if suffix.iter().all(|&d| d == b'0') || suffix.iter().all(|&d| d == b'9') {
+            guard += 16;
+            continue;
+        }
+        last.truncate(end);
+        break (whole, blocks, elapsed, limit);
+    };
 
-    // Binary splitting turns the series into a balanced product tree, so the
-    // per-term cost is a balanced GMP multiply instead of a full-precision
-    // division. The root's P product is never used, so the top merge is
-    // inlined to skip it.
-    let mid = limit / 2;
-    let (l, r) = std::thread::scope(|s| {
-        let handle = s.spawn(|| split_par(0, mid, 3));
-        let r = split_par(mid, limit, 3);
-        (handle.join().expect("split thread panicked"), r)
-    });
-    let q: Integer = (&l.q * &r.q).into();
-    let t: Integer = &l.t * &r.q + Integer::from(&l.p * &r.t);
-
-    // pi * 10^scale = 426880 * sqrt(10005 * 10^(2*scale)) * q / t
-    // Everything stays exact until the final truncating division, with `guard`
-    // spare digits below the ones we print.
-    let guard: u32 = 16;
-    let scale = digits + guard;
-    let mut radicand = Integer::from(10).pow(2 * scale);
-    radicand *= 10005u32;
-    let mut pi_scaled = Integer::from(426880u32);
-    pi_scaled *= radicand.sqrt();
-    pi_scaled *= &q;
-    pi_scaled /= &t;
-
-    let elapsed = start.elapsed();
-
-    let pi_str = pi_scaled.to_string();
-    println!("{}.{}", &pi_str[..1], &pi_str[1..=digits as usize]);
+    let mut out = io::stdout().lock();
+    write!(out, "{whole}.")?;
+    for block in blocks {
+        out.write_all(block.as_bytes())?;
+    }
+    writeln!(out)?;
 
     if !quiet {
         eprintln!(
@@ -176,4 +119,5 @@ fn main() {
             digits, elapsed, limit
         );
     }
+    Ok(())
 }
