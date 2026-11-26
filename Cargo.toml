@@ -11,4 +11,5 @@ keywords = ["pi", "chudnovsky", "math", "big-number"]
 categories = ["command-line-utilities", "mathematics", "science"]
 
 [dependencies]
+flint3-sys = { version = "3.6.1", features = ["gmp-mpfr-sys"] }
 rug = { version = "1.24", features = ["integer"] }

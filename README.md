@@ -26,14 +26,27 @@ pi-calc -q 10000  # 10000 digits, quiet mode
 
 Uses the [Chudnovsky algorithm](https://en.wikipedia.org/wiki/Chudnovsky_algorithm), the same method used for world-record pi computations. Each iteration yields ~14.18 digits.
 
-The series is summed by binary splitting over exact GMP integers (through the `rug` crate), with bounded parallelism across the top levels of the product tree. See [docs/algorithm.md](docs/algorithm.md) for the formula, the splitting recurrence, the exact-integer finalization, and the stdout/stderr contract.
+The series is summed by binary splitting over GMP integers. The product tree cancels common
+factors before multiplication and runs independent work in parallel. Large multiplication,
+Newton division, and decimal string conversion use FLINT's vectorized and multithreaded
+arithmetic. The result is computed in binary fixed point and converted to decimal in blocks.
+See [docs/algorithm.md](docs/algorithm.md).
 
 ## Performance
 
-Runtime depends on the requested precision, CPU, Rust toolchain, and GMP build. Illustrative
-median warm runs on an Apple M4 Max with Rust 1.96.1: about 0.01 seconds for 100,000 digits,
-0.13 seconds for 1,000,000, and 3.2 seconds for 10,000,000. These are observations, not
-cross-machine guarantees.
+Release-build wall time on an Apple M4 Max with Rust 1.96.1. Both builds redirected stdout
+away from the terminal. The 1 million and 10 million rows are medians of three alternating
+runs. The 100 million row is one run per version.
+
+| Decimal digits | Previous binary splitting (`9a68a2c`) | Optimized | Speedup |
+| ---: | ---: | ---: | ---: |
+| 1,000,000 | 0.139 s | 0.086 s | 1.6× |
+| 10,000,000 | 2.43 s | 1.23 s | 2.0× |
+| 100,000,000 | 35.28 s | 14.70 s | 2.4× |
+
+At 100 million digits, peak resident memory is 2.65 GB, down from 3.20 GB in the previous
+binary-splitting implementation. The 100 million measurement was made while the test machine
+was heavily loaded, so it is a conservative wall-clock result rather than a best-case benchmark.
 
 To measure the release build on your machine without including terminal output time:
 
@@ -44,11 +57,11 @@ cargo build --release
 
 ## Build
 
-Requires Rust 1.75+ and GMP/MPFR dev libraries.
+Requires Rust 1.85+, autotools, and GMP/MPFR dev libraries.
 
 ```bash
 # Debian/Ubuntu
-sudo apt install libgmp-dev libmpfr-dev libmpc-dev
+sudo apt install autoconf automake libtool libgmp-dev libmpfr-dev libmpc-dev
 
 cargo build --release
 ```

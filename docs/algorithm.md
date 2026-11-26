@@ -17,9 +17,9 @@ T_k = \frac{(6k)!\,(13591409 + 545140134k)}
 {(3k)!\,(k!)^3\,(-640320)^{3k}}.
 \]
 
-Each term contributes about 14.181 decimal digits. `pi-calc` computes
-`ceil(digits / 14.181) + 2` terms so the requested digit count has a small
-series margin.
+Each term contributes about 14.181 decimal digits. The number of terms is
+`ceil(scale / 14.181) + 2`, where `scale` includes the requested digits and
+the guard digits used to verify decimal truncation.
 
 ## Binary splitting over exact integers
 
@@ -40,51 +40,69 @@ p(k) = (6k-5)(2k-1)(6k-1), \qquad
 q(k) = k^3\,\frac{640320^3}{24}.
 \]
 
-The ratio \(p(k)/q(k)\) is exactly the ratio of consecutive series terms
-\(T_k/T_{k-1}\) after cancelling common factors. Ranges merge with
+The factorial contribution to each term is obtained from the previous one
+by multiplying by \(p(k)/q(k)\). The sign and linear factor \(Ak+B\) are
+applied separately, with \(p(0)=q(0)=1\). Adjacent ranges merge by
 
 \[
-P = P_1P_2, \qquad Q = Q_1Q_2, \qquad T = T_1Q_2 + P_1T_2,
+P = P_1P_2, \qquad Q = Q_1Q_2, \qquad T = T_1Q_2 + P_1T_2.
 \]
 
-so every multiplication is balanced (operands of similar size), which is what
-GMP's sub-quadratic multiplication is good at. The whole sum is therefore one
-product tree costing roughly \(O(M(n)\log n)\) instead of one full-precision
-division per term. The tree's two halves are independent, so the top few
-levels are evaluated on bounded scoped threads; the depth and the range size
-both cap the parallelism.
+If \(g\) divides both \(P_1\) and \(Q_2\), it divides all three merge
+results. The implementation divides those two inputs by \(g\) before
+multiplying, preserving \(P/Q\) and \(T/Q\) while keeping the operands
+smaller. A sieve supplies odd prime factors, which are collected once per
+small group of terms and merged in sorted order. Since \(P\) is always odd,
+powers of two in \(Q\) are kept as a shift count. The two halves of large
+ranges and the biggest independent merge products run on bounded scoped
+threads. See [Bellard's description of factor cancellation](https://bellard.org/pi/pi2700e9/pipcrecord.pdf).
 
 ## Precision and output
 
-All arithmetic is exact integer arithmetic. The final value is computed as
+For a binary scale of \(b\) bits, the calculator forms the fixed-point approximation
 
 \[
-\left\lfloor \pi\cdot 10^{d+g} \right\rfloor
-=
+x =
 \left\lfloor
-\frac{426880\,\left\lfloor\sqrt{10005\cdot 10^{2(d+g)}}\right\rfloor\, Q}{T}
-\right\rfloor ,
+\frac{426880\,\left\lfloor\sqrt{10005\cdot 2^{2b}}\right\rfloor Q}{T}
+\right\rfloor.
 \]
 
-where \(d\) is the requested digit count and \(g = 16\) guard digits absorb the
-integer-square-root truncation and the omitted series tail (each term gives
-~14.181 digits, so `ceil(digits / 14.181) + 2` terms leave a tail far below
-the guard). The program then prints the integer part and exactly `digits`
-fractional digits, truncating rather than rounding — the same contract as
-before.
+The integer square root can run alongside the series. The series
+alternates, with \(|T_1/T_0| < 2\cdot10^{-14}\) and
+\(|T_k/T_{k-1}| < 10^{-14.181}\) for \(k\ge2\). The first omitted term
+bounds the tail, so the two extra terms put the resulting error in pi
+well below one binary unit. The root loses less than one unit before
+multiplication by \(426880Q/T < 0.032\), and the final division loses
+less than one unit. Together, these bounds put \(x\) within two units
+of \(\pi\cdot 2^b\).
+
+For decimal conversion, multiplying the remaining fraction by \(5^k\)
+and moving its binary point by \(k\) extracts the next \(k\) decimal
+digits. FLINT converts large extracted integers while the remaining fraction
+is processed in parallel. Blocks are zero-padded to their fixed widths.
+
+The first pass uses 32 decimal digits' worth of extra binary precision
+and checks 16 extra decimal digits before truncating. A suffix of all
+zeros or all nines triggers a retry at higher precision, since the
+fixed-point error could cross a truncation boundary. The calculator
+prints the integer part and exactly the requested number of fractional
+digits.
 
 `--quiet` sends only the pi value to standard output. In normal mode the pi
-value is still the only standard-output payload; timing and iteration details
-are diagnostics on standard error. That split lets scripts pipe stdout
-directly while still allowing humans to see performance information.
+value goes to standard output, with timing and iteration details on standard
+error. This lets scripts pipe the digits directly while keeping performance
+information visible.
 
 ## Complexity and bounds
 
 The maximum supported request is 100,000,000 decimal digits. This explicit
 bound prevents accidental requests that would need infeasible memory and time.
-Large requests scale by the number of Chudnovsky terms and by arbitrary
-precision arithmetic cost, not by a simple linear relationship.
+Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
+dividing, and converting large integers.
 
-The implementation is a single binary. It uses [GMP](https://gmplib.org/) for
-exact integers through the [`rug`](https://docs.rs/rug/) crate; no
-floating-point arithmetic is involved anywhere in the computation.
+The implementation uses [GMP](https://gmplib.org/) through the
+[`rug`](https://docs.rs/rug/) crate for the series representation and small arithmetic.
+Large multiplications call FLINT's small-prime FFT directly on GMP limbs; the final division
+uses FLINT's multiplication-based Newton division, and large decimal strings use FLINT's
+radix conversion. FLINT worker threads are sized from the available parallelism.
