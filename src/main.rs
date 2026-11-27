@@ -24,7 +24,7 @@ FLAGS:
   -q, --quiet   Suppress timing info, output only the digits
 
 ARGS:
-  <DIGITS>    Number of decimal digits to compute (default: 1000, limited only by memory, address space, and time)
+  <DIGITS>    Number of decimal digits to compute (default: 1000, limited only by memory, backend representation, and time)
 
 The Chudnovsky algorithm is used. Each digit costs ~log2(10) approx 3.32 bits.
 Runtime depends heavily on precision, hardware, and the GMP build.
@@ -77,6 +77,16 @@ fn precision_inputs(digits: usize, guard: usize) -> Option<(usize, usize)> {
     Some((digits.checked_add(2 * guard)?, digits.checked_add(guard)?))
 }
 
+fn fits_gmp_product(bits: usize) -> bool {
+    // The largest intermediate is the final numerator before division: the
+    // scaled root times Q. Conservatively allow a few limbs for constants and
+    // rounding beyond twice the output precision.
+    bits.checked_div(64)
+        .and_then(|limbs| limbs.checked_mul(2))
+        .and_then(|limbs| limbs.checked_add(16))
+        .is_some_and(|limbs| limbs <= i32::MAX as usize)
+}
+
 fn main() -> io::Result<()> {
     let (digits, quiet) = parse_args();
     let start = Instant::now();
@@ -98,6 +108,10 @@ fn main() -> io::Result<()> {
             eprintln!("error: digit count exceeds this platform's addressable precision");
             process::exit(1);
         };
+        if !fits_gmp_product(bits) {
+            eprintln!("error: digit count exceeds the GMP backend's maximum integer size");
+            process::exit(1);
+        }
         let (pi, bits, limit, powers) = thread::scope(|scope| {
             let powers = scope.spawn(|| {
                 let powers = conversion.powers();
@@ -160,5 +174,11 @@ mod tests {
     fn precision_inputs_reject_usize_overflow() {
         assert_eq!(precision_inputs(usize::MAX, 16), None);
         assert!(precision_inputs(100_000_001, 16).is_some());
+    }
+
+    #[test]
+    fn gmp_product_boundary_is_checked() {
+        assert!(super::fits_gmp_product(1_000_000));
+        assert!(!super::fits_gmp_product(usize::MAX / 2));
     }
 }

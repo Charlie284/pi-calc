@@ -10,7 +10,7 @@ Computes pi to arbitrary precision without a fixed digit ceiling.
 pi-calc [FLAGS] [DIGITS]
 ```
 
-- `DIGITS` -- number of decimal digits (default: 1000; limited only by memory, address space, and time)
+- `DIGITS` -- number of decimal digits (default: 1000; limited only by memory, backend representation, and time)
 - `-q, --quiet` -- suppress timing info, output only the digits
 - `-h, --help` -- print help
 

@@ -110,8 +110,10 @@ information visible.
 ## Complexity and bounds
 
 There is no fixed digit limit. Precision and term indexes use machine-word-sized
-integers, with overflow checked before computation; practical requests are bounded
-by available memory, address space, and time. Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
+integers, with overflow checked before computation. The GMP backend also limits
+any single integer to 2,147,483,647 limbs; the calculator validates the largest
+intermediate against that bound before starting. Practical requests are bounded
+by available memory, address space, backend representation, and time. Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
 dividing, and converting large integers.
 
 The implementation uses [GMP](https://gmplib.org/) through the
