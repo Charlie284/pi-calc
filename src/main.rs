@@ -24,7 +24,7 @@ FLAGS:
   -q, --quiet   Suppress timing info, output only the digits
 
 ARGS:
-  <DIGITS>    Number of decimal digits to compute (default: 1000, max: 100_000_000)
+  <DIGITS>    Number of decimal digits to compute (default: 1000, limited only by memory and time)
 
 The Chudnovsky algorithm is used. Each digit costs ~log2(10) approx 3.32 bits.
 Runtime depends heavily on precision, hardware, and the GMP build.
@@ -55,9 +55,9 @@ fn parse_args() -> (u32, bool) {
                     process::exit(1);
                 }
                 match a.parse::<u32>() {
-                    Ok(n) if n > 0 && n <= 100_000_000 => digits = Some(n),
+                    Ok(n) if n > 0 => digits = Some(n),
                     Ok(_) => {
-                        eprintln!("error: digits must be between 1 and 100,000,000");
+                        eprintln!("error: digits must be positive");
                         process::exit(1);
                     }
                     Err(_) => {

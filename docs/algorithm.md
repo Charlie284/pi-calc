@@ -109,9 +109,8 @@ information visible.
 
 ## Complexity and bounds
 
-The maximum supported request is 100,000,000 decimal digits. This explicit
-bound prevents accidental requests that would need infeasible memory and time.
-Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
+There is no fixed digit limit; practical requests are bounded by available memory,
+address space, and time. Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
 dividing, and converting large integers.
 
 The implementation uses [GMP](https://gmplib.org/) through the

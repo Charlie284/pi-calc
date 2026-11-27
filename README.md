@@ -2,7 +2,7 @@
 
 A fast pi calculator using the Chudnovsky algorithm. Written in Rust.
 
-Computes pi to arbitrary precision with an explicit upper bound of 100,000,000 decimal digits.
+Computes pi to arbitrary precision.
 
 ## Usage
 
@@ -10,7 +10,7 @@ Computes pi to arbitrary precision with an explicit upper bound of 100,000,000 d
 pi-calc [FLAGS] [DIGITS]
 ```
 
-- `DIGITS` -- number of decimal digits (default: 1000, max: 100,000,000)
+- `DIGITS` -- number of decimal digits (default: 1000; limited only by memory and time)
 - `-q, --quiet` -- suppress timing info, output only the digits
 - `-h, --help` -- print help
 
