@@ -75,7 +75,7 @@ FLINT's Newton square root runs alongside the series. The series
 alternates, with \(|T_1/T_0| < 2\cdot10^{-14}\) and
 \(|T_k/T_{k-1}| < 10^{-14.181}\) for \(k\ge2\). The first omitted term
 bounds the tail, so the two extra terms put the resulting error in pi
-well below one binary unit. The root loses less than one unit before
+well below one binary unit at the requested precision plus guard digits. The root loses less than one unit before
 multiplication by \(426880Q/T < 0.032\), and the final division loses
 less than one unit. Before division, Q and T are both truncated past three
 limbs beyond the output precision; that common rescaling changes the quotient

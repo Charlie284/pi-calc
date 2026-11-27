@@ -108,22 +108,19 @@ pub fn use_mimalloc() {
 }
 
 pub fn drop_low_limbs(value: &Integer, limbs: usize) -> Integer {
-    nonnegative_from_limbs(0, value.as_limbs().get(limbs..).unwrap_or_default())
+    nonnegative_from_limbs(value.as_limbs().get(limbs..).unwrap_or_default())
 }
 
-pub fn nonnegative_from_limbs(zeros: usize, limbs: &[u64]) -> Integer {
+pub fn nonnegative_from_limbs(limbs: &[u64]) -> Integer {
     let used = limbs.len() - limbs.iter().rev().take_while(|&&limb| limb == 0).count();
-    if zeros + used == 0 {
+    if used == 0 {
         return Integer::new();
     }
-    let len = zeros + used;
+    let len = used;
     let mut out = Integer::with_capacity(len * 64);
     unsafe {
         let raw = &mut *out.as_raw_mut().cast::<MpzRaw>();
-        std::ptr::write_bytes(raw.limbs, 0, zeros);
-        if used != 0 {
-            std::ptr::copy_nonoverlapping(limbs.as_ptr(), raw.limbs.add(zeros), used);
-        }
+        std::ptr::copy_nonoverlapping(limbs.as_ptr(), raw.limbs, used);
         raw.size = len as c_int;
     }
     out

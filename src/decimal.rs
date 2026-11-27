@@ -13,11 +13,17 @@ pub struct Conversion {
 
 impl Conversion {
     pub fn new(digits: usize, workers: usize) -> Self {
-        let levels = if workers <= 1 {
+        let mut levels = if workers <= 1 {
             0
         } else {
             workers.next_power_of_two().trailing_zeros() + 1
         };
+        // Spawning a wide tree for tiny chunks costs more than formatting
+        // them serially. Large conversions keep one oversubscribed level for
+        // load balancing.
+        while levels > 0 && digits.div_ceil(1 << levels) < 1_000 {
+            levels -= 1;
+        }
         let chunk = digits.div_ceil(1 << levels);
         let chunk_limbs = (chunk as f64 * std::f64::consts::LOG2_10 / 64.0) as usize + 1;
         Self {
@@ -115,7 +121,6 @@ fn write_fraction(
     drop(fraction);
     let shifted_limbs = shifted.as_limbs();
     let lower = flint::nonnegative_from_limbs(
-        0,
         shifted_limbs
             .get(dropped..limbs.min(shifted_limbs.len()))
             .unwrap_or_default(),
@@ -134,8 +139,7 @@ fn write_fraction(
 
 pub fn convert(pi: &Integer, conversion: Conversion, powers: &[Integer], workers: usize) -> String {
     let limbs = conversion.limbs(conversion.levels);
-    let fraction =
-        flint::nonnegative_from_limbs(0, &pi.as_limbs()[..limbs.min(pi.as_limbs().len())]);
+    let fraction = flint::nonnegative_from_limbs(&pi.as_limbs()[..limbs.min(pi.as_limbs().len())]);
     let mut digits = vec![b'0'; conversion.capacity()];
     write_fraction(
         fraction,
