@@ -236,14 +236,22 @@ pub fn decimal_string(value: &Integer) -> String {
     }
 }
 
-pub fn sqrt_10005(bits: u32, workers: usize) -> Integer {
+pub fn sqrt_10005(bits: usize, workers: usize) -> Integer {
     use_workers(workers);
     let mut value: flint3_sys::arb_struct = unsafe { std::mem::zeroed() };
     let mut root = Fmpz::new();
     unsafe {
         flint3_sys::arb_init(&mut value);
-        flint3_sys::arb_sqrt_ui(&mut value, 10_005, i64::from(bits) + 128);
-        flint3_sys::arb_mul_2exp_si(&mut value, &value, i64::from(bits));
+        flint3_sys::arb_sqrt_ui(
+            &mut value,
+            10_005,
+            i64::try_from(bits).expect("precision exceeds FLINT") + 128,
+        );
+        flint3_sys::arb_mul_2exp_si(
+            &mut value,
+            &value,
+            i64::try_from(bits).expect("precision exceeds FLINT"),
+        );
         flint3_sys::arf_get_fmpz(root.0.as_mut_ptr(), flint3_sys::arb_mid_ptr(&mut value), 0);
         flint3_sys::arb_clear(&mut value);
     }

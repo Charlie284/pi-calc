@@ -109,8 +109,9 @@ information visible.
 
 ## Complexity and bounds
 
-There is no fixed digit limit; practical requests are bounded by available memory,
-address space, and time. Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
+There is no fixed digit limit. Precision and term indexes use machine-word-sized
+integers, with overflow checked before computation; practical requests are bounded
+by available memory, address space, and time. Runtime grows with the number of Chudnovsky terms and the cost of multiplying,
 dividing, and converting large integers.
 
 The implementation uses [GMP](https://gmplib.org/) through the
