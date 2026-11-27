@@ -2,35 +2,54 @@ use rug::Integer;
 
 #[derive(Clone, Copy)]
 pub struct Factor {
-    prime: u32,
-    exponent: u32,
+    prime: usize,
+    exponent: usize,
 }
 
 // P is odd, so only odd factors of Q can cancel. Store the least prime
 // divisor of each odd composite. A zero entry represents a prime (or 1).
-pub struct Sieve(Vec<u16>);
+// Sixteen bits are enough for ordinary sizes; thirty-two bits cover every
+// input representable with usize term indexes on supported platforms.
+enum SieveSlots {
+    Small(Vec<u16>),
+    Large(Vec<u32>),
+}
+
+pub struct Sieve(SieveSlots);
 
 impl Sieve {
-    pub fn new(max: u32) -> Self {
-        let mut least = vec![0; (max / 2 + 1) as usize];
-        let mut p = 3;
-        while p * p <= max {
-            if least[(p / 2) as usize] == 0 {
-                for n in (p * p..=max).step_by((2 * p) as usize) {
-                    let slot = &mut least[(n / 2) as usize];
-                    if *slot == 0 {
-                        *slot = p as u16;
+    pub fn new(max: usize) -> Self {
+        macro_rules! fill {
+            ($ty:ty) => {{
+                let mut least = vec![0 as $ty; max / 2 + 1];
+                let mut p = 3usize;
+                while p <= max / p {
+                    if least[p / 2] == 0 {
+                        for n in (p * p..=max).step_by(2 * p) {
+                            let slot = &mut least[n / 2];
+                            if *slot == 0 {
+                                *slot = p as $ty;
+                            }
+                        }
                     }
+                    p += 2;
                 }
-            }
-            p += 2;
+                least
+            }};
         }
-        Self(least)
+        if max <= (u16::MAX as usize) * (u16::MAX as usize) {
+            Self(SieveSlots::Small(fill!(u16)))
+        } else {
+            Self(SieveSlots::Large(fill!(u32)))
+        }
     }
 
-    pub fn factor(&self, mut odd: u32, exponent: u32, factors: &mut Vec<Factor>) {
+    pub fn factor(&self, mut odd: usize, exponent: usize, factors: &mut Vec<Factor>) {
         while odd > 1 {
-            let least = u32::from(self.0[(odd / 2) as usize]);
+            let least = match &self.0 {
+                SieveSlots::Small(slots) => slots[odd / 2] as usize,
+                SieveSlots::Large(slots) => slots[odd / 2] as usize,
+            };
             if least == 0 {
                 factors.push(Factor {
                     prime: odd,
@@ -90,8 +109,6 @@ pub fn merge(left: &[Factor], right: &[Factor]) -> Vec<Factor> {
 // Remove the intersection of the two factorizations and construct its value
 // as a balanced product. Prime powers normally fit in a word at lower levels.
 pub fn cancel(left: &mut Vec<Factor>, right: &mut Vec<Factor>) -> Integer {
-    use rug::ops::Pow;
-
     let (mut i, mut j) = (0, 0);
     let mut parts = Vec::new();
     let mut word = 1u64;
@@ -103,8 +120,11 @@ pub fn cancel(left: &mut Vec<Factor>, right: &mut Vec<Factor>) -> Integer {
                 let exponent = l.exponent.min(r.exponent);
                 l.exponent -= exponent;
                 r.exponent -= exponent;
-                let prime = u64::from(l.prime);
-                if let Some(power) = prime.checked_pow(exponent) {
+                let prime = l.prime as u64;
+                if let Some(power) = u32::try_from(exponent)
+                    .ok()
+                    .and_then(|exponent| prime.checked_pow(exponent))
+                {
                     if let Some(product) = word.checked_mul(power) {
                         word = product;
                     } else {
@@ -112,7 +132,7 @@ pub fn cancel(left: &mut Vec<Factor>, right: &mut Vec<Factor>) -> Integer {
                         word = power;
                     }
                 } else {
-                    parts.push(Integer::from(prime).pow(exponent));
+                    parts.push(pow_integer(prime, exponent));
                 }
                 i += 1;
                 j += 1;
@@ -129,6 +149,21 @@ pub fn cancel(left: &mut Vec<Factor>, right: &mut Vec<Factor>) -> Integer {
     }
 }
 
+fn pow_integer(base: u64, mut exponent: usize) -> Integer {
+    let mut result = Integer::from(1);
+    let mut power = Integer::from(base);
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            result *= &power;
+        }
+        exponent >>= 1;
+        if exponent != 0 {
+            power = Integer::from(&power * &power);
+        }
+    }
+    result
+}
+
 fn product(parts: &mut [Integer]) -> Integer {
     if parts.len() == 1 {
         return std::mem::take(&mut parts[0]);
@@ -137,7 +172,7 @@ fn product(parts: &mut [Integer]) -> Integer {
     product(left) * product(right)
 }
 
-pub fn add_q_constant(factors: &mut Vec<Factor>, terms: u32) {
+pub fn add_q_constant(factors: &mut Vec<Factor>, terms: usize) {
     // Odd part of (640320^3 / 24)^terms.
     for (prime, exponent) in [(3, 2), (5, 3), (23, 3), (29, 3)] {
         factors.push(Factor {

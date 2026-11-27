@@ -15,7 +15,7 @@ const Q_SHIFT: u32 = C3_OVER_24.trailing_zeros();
 struct Pqt {
     p: Integer,
     q_odd: Integer,
-    q_shift: u32,
+    q_shift: usize,
     t: Integer,
 }
 
@@ -26,8 +26,8 @@ struct Factored {
 }
 
 fn split_small(
-    lo: u32,
-    hi: u32,
+    lo: usize,
+    hi: usize,
     sieve: &Sieve,
     p_factors: &mut Vec<Factor>,
     q_factors: &mut Option<Vec<Factor>>,
@@ -42,14 +42,14 @@ fn split_small(
                 t: Integer::from(B),
             };
         }
-        let k = u64::from(lo);
+        let k = lo as u64;
         let parts = [6 * lo - 5, 2 * lo - 1, 6 * lo - 1];
         if need_p {
             for factor in parts {
                 sieve.factor(factor, 1, p_factors);
             }
         }
-        let product = u128::from(parts[0]) * u128::from(parts[1]) * u128::from(parts[2]);
+        let product = parts[0] as u128 * parts[1] as u128 * parts[2] as u128;
         let p = Integer::from(product);
         let linear = u128::from(A * k + B);
         let mut t = product
@@ -59,12 +59,12 @@ fn split_small(
             t = -t;
         }
 
-        let twos = lo.trailing_zeros();
-        let odd = u64::from(lo >> twos);
+        let twos = lo.trailing_zeros() as usize;
+        let odd = lo >> twos;
         if let Some(q_factors) = q_factors {
-            sieve.factor(odd as u32, 3, q_factors);
+            sieve.factor(odd, 3, q_factors);
         }
-        let odd_cubed = u128::from(odd).pow(3);
+        let odd_cubed = (odd as u128).pow(3);
         let odd_constant = u128::from(C3_OVER_24 >> Q_SHIFT);
         let q_odd = odd_cubed.checked_mul(odd_constant).map_or_else(
             || Integer::from(odd_cubed) * (C3_OVER_24 >> Q_SHIFT),
@@ -73,7 +73,7 @@ fn split_small(
         return Pqt {
             p,
             q_odd,
-            q_shift: Q_SHIFT + 3 * twos,
+            q_shift: Q_SHIFT as usize + 3 * twos,
             t,
         };
     }
@@ -85,8 +85,8 @@ fn split_small(
 }
 
 fn split(
-    lo: u32,
-    hi: u32,
+    lo: usize,
+    hi: usize,
     level: u32,
     parallel_depth: u32,
     workers: usize,
@@ -94,9 +94,9 @@ fn split(
     need_p: bool,
 ) -> Factored {
     if hi - lo <= 64 {
-        let mut p = Vec::with_capacity(4 * (hi - lo) as usize);
+        let mut p = Vec::with_capacity(4 * (hi - lo));
         // The leftmost ranges are never used as a right operand.
-        let mut q = (lo != 0).then(|| Vec::with_capacity(7 * (hi - lo) as usize));
+        let mut q = (lo != 0).then(|| Vec::with_capacity(7 * (hi - lo)));
         let value = split_small(lo, hi, sieve, &mut p, &mut q, need_p);
         factors::sort_and_collect(&mut p);
         let mut q = q.unwrap_or_default();
@@ -180,9 +180,9 @@ fn split_depth(workers: usize) -> u32 {
     }
 }
 
-pub fn pi_fixed(scale: u32, bits: u32, workers: usize) -> (Integer, u32, u32) {
+pub fn pi_fixed(scale: usize, bits: usize, workers: usize) -> (Integer, usize, usize) {
     // The extra terms put the series tail below one binary ulp.
-    let limit = (f64::from(scale) / 14.181).ceil() as u32 + 2;
+    let limit = (scale as f64 / 14.181).ceil() as usize + 2;
     let split = |workers: usize| {
         let sieve = Sieve::new(6 * (limit - 1) - 1);
         split(0, limit, 0, split_depth(workers), workers, &sieve, false).value
@@ -217,7 +217,7 @@ pub fn pi_fixed(scale: u32, bits: u32, workers: usize) -> (Integer, u32, u32) {
     q <<= series.q_shift;
     let mut t = series.t;
     let length = t.as_limbs().len();
-    let keep = bits as usize / 64 + 3;
+    let keep = bits / 64 + 3;
     // Three limbs beyond the output precision are enough: truncating both
     // operands by the same power of two changes the quotient by far less
     // than the fixed-point errors already bounded by the guard digits.

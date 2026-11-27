@@ -24,15 +24,15 @@ FLAGS:
   -q, --quiet   Suppress timing info, output only the digits
 
 ARGS:
-  <DIGITS>    Number of decimal digits to compute (default: 1000, max: 100_000_000)
+  <DIGITS>    Number of decimal digits to compute (default: 1000, limited only by memory, backend representation, and time)
 
 The Chudnovsky algorithm is used. Each digit costs ~log2(10) approx 3.32 bits.
 Runtime depends heavily on precision, hardware, and the GMP build.
 ";
 
-fn parse_args() -> (u32, bool) {
+fn parse_args() -> (usize, bool) {
     let args: Vec<String> = env::args().collect();
-    let mut digits: Option<u32> = None;
+    let mut digits: Option<usize> = None;
     let mut quiet = false;
 
     let mut i = 1;
@@ -54,10 +54,10 @@ fn parse_args() -> (u32, bool) {
                     eprintln!("error: unexpected argument '{}'", a);
                     process::exit(1);
                 }
-                match a.parse::<u32>() {
-                    Ok(n) if n > 0 && n <= 100_000_000 => digits = Some(n),
+                match a.parse::<usize>() {
+                    Ok(n) if n > 0 => digits = Some(n),
                     Ok(_) => {
-                        eprintln!("error: digits must be between 1 and 100,000,000");
+                        eprintln!("error: digits must be positive");
                         process::exit(1);
                     }
                     Err(_) => {
@@ -73,17 +73,45 @@ fn parse_args() -> (u32, bool) {
     (digits.unwrap_or(1_000), quiet)
 }
 
+fn precision_inputs(digits: usize, guard: usize) -> Option<(usize, usize)> {
+    Some((digits.checked_add(2 * guard)?, digits.checked_add(guard)?))
+}
+
+fn fits_gmp_product(bits: usize) -> bool {
+    // The largest intermediate is the final numerator before division: the
+    // scaled root times Q. Conservatively allow a few limbs for constants and
+    // rounding beyond twice the output precision.
+    bits.checked_div(64)
+        .and_then(|limbs| limbs.checked_mul(2))
+        .and_then(|limbs| limbs.checked_add(16))
+        .is_some_and(|limbs| limbs <= i32::MAX as usize)
+}
+
 fn main() -> io::Result<()> {
     let (digits, quiet) = parse_args();
     let start = Instant::now();
     let workers = thread::available_parallelism().map_or(1, usize::from);
     flint::use_mimalloc();
     flint::set_workers(workers);
-    let mut guard = 16;
+    let mut guard = 16usize;
     let (whole, text, elapsed, limit) = loop {
-        let scale = digits + 2 * guard;
-        let conversion = decimal::Conversion::new((digits + guard) as usize, workers);
-        let bits = conversion.fraction_bits();
+        let Some((scale, conversion_digits)) = precision_inputs(digits, guard) else {
+            eprintln!("error: digit count exceeds this platform's addressable precision");
+            process::exit(1);
+        };
+        let conversion = decimal::Conversion::new(conversion_digits, workers);
+        let bits = conversion.try_fraction_bits().and_then(|bits| {
+            bits.checked_add(128)
+                .and_then(|with_margin| i64::try_from(with_margin).ok().map(|_| bits))
+        });
+        let Some(bits) = bits else {
+            eprintln!("error: digit count exceeds this platform's addressable precision");
+            process::exit(1);
+        };
+        if !fits_gmp_product(bits) {
+            eprintln!("error: digit count exceeds the GMP backend's maximum integer size");
+            process::exit(1);
+        }
         let (pi, bits, limit, powers) = thread::scope(|scope| {
             let powers = scope.spawn(|| {
                 let powers = conversion.powers();
@@ -105,14 +133,14 @@ fn main() -> io::Result<()> {
         let conversion_start = Instant::now();
         let whole = Integer::from(&pi >> bits);
         let mut text = decimal::convert(&pi, conversion, &powers, workers);
-        text.truncate((digits + guard) as usize);
+        text.truncate(digits + guard);
         if env::var_os("PI_CALC_PROFILE").is_some() {
             eprintln!(
                 "profile: decimal conversion {:?}",
                 conversion_start.elapsed()
             );
         }
-        let end = text.len() - guard as usize;
+        let end = text.len() - guard;
         let suffix = &text.as_bytes()[end..];
 
         // The fixed-point error is below two ulps. If the guard digits
@@ -136,4 +164,21 @@ fn main() -> io::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::precision_inputs;
+
+    #[test]
+    fn precision_inputs_reject_usize_overflow() {
+        assert_eq!(precision_inputs(usize::MAX, 16), None);
+        assert!(precision_inputs(100_000_001, 16).is_some());
+    }
+
+    #[test]
+    fn gmp_product_boundary_is_checked() {
+        assert!(super::fits_gmp_product(1_000_000));
+        assert!(!super::fits_gmp_product(usize::MAX / 2));
+    }
 }

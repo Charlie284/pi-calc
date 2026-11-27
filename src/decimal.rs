@@ -33,20 +33,29 @@ impl Conversion {
         }
     }
 
-    pub fn limbs(self, level: u32) -> usize {
-        (self.chunk_limbs << level) + FRACTION_GUARD_LIMBS
+    fn try_limbs(self, level: u32) -> Option<usize> {
+        self.chunk_limbs
+            .checked_shl(level)
+            .and_then(|limbs| limbs.checked_add(FRACTION_GUARD_LIMBS))
     }
 
-    pub fn fraction_bits(self) -> u32 {
-        (64 * self.limbs(self.levels)) as u32
+    pub fn limbs(self, level: u32) -> usize {
+        self.try_limbs(level)
+            .expect("digit count exceeds addressable precision")
+    }
+
+    pub fn try_fraction_bits(self) -> Option<usize> {
+        64usize.checked_mul(self.try_limbs(self.levels)?)
     }
 
     pub fn capacity(self) -> usize {
-        self.chunk << self.levels
+        self.chunk
+            .checked_shl(self.levels)
+            .expect("digit count exceeds addressable precision")
     }
 
     pub fn powers(self) -> Vec<Integer> {
-        let mut powers = vec![pow10(self.chunk as u32)];
+        let mut powers = vec![pow10(self.chunk)];
         for _ in 1..self.levels {
             let last = &powers[powers.len() - 1];
             powers.push(flint::multiply_with_workers(last, last, 1));
@@ -55,21 +64,21 @@ impl Conversion {
     }
 }
 
-fn pow5(exponent: u32) -> Integer {
+fn pow5(exponent: usize) -> Integer {
     use rug::ops::Pow;
     if exponent < 65_536 {
-        return Integer::from(5).pow(exponent);
+        return Integer::from(5).pow(exponent as u32);
     }
     let half = pow5(exponent / 2);
     let square = flint::multiply_with_workers(&half, &half, 1);
     if exponent & 1 == 1 {
-        square * 5u32
+        square * 5usize
     } else {
         square
     }
 }
 
-fn pow10(exponent: u32) -> Integer {
+fn pow10(exponent: usize) -> Integer {
     pow5(exponent) << exponent
 }
 
@@ -150,4 +159,17 @@ pub fn convert(pi: &Integer, conversion: Conversion, powers: &[Integer], workers
         workers,
     );
     String::from_utf8(digits).expect("decimal digits are ASCII")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Conversion;
+
+    #[test]
+    fn precision_is_not_truncated_at_u32_boundary() {
+        let bits = Conversion::new(1_300_000_000, 1)
+            .try_fraction_bits()
+            .unwrap();
+        assert!(bits > u32::MAX as usize);
+    }
 }

@@ -20,11 +20,11 @@ fn prints_the_requested_number_of_decimal_digits() {
 }
 
 #[test]
-fn rejects_out_of_range_digit_counts() {
+fn rejects_zero_digit_count() {
     let output = pi_calc().arg("0").output().expect("pi-calc should run");
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("between 1 and 100,000,000"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("digits must be positive"));
 }
 
 #[test]
