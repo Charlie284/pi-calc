@@ -61,11 +61,38 @@ impl Drop for Fmpz {
     }
 }
 
+pub fn nonnegative_from_limbs(zeros: usize, limbs: &[u64]) -> Integer {
+    let used = limbs.len() - limbs.iter().rev().take_while(|&&limb| limb == 0).count();
+    if zeros + used == 0 {
+        return Integer::new();
+    }
+    let len = zeros + used;
+    let mut out = Integer::with_capacity(len * 64);
+    unsafe {
+        let raw = &mut *out.as_raw_mut().cast::<MpzRaw>();
+        std::ptr::write_bytes(raw.limbs, 0, zeros);
+        if used != 0 {
+            std::ptr::copy_nonoverlapping(limbs.as_ptr(), raw.limbs.add(zeros), used);
+        }
+        raw.size = len as c_int;
+    }
+    out
+}
+
 pub fn set_workers(workers: usize) {
     unsafe { flint3_sys::flint_set_num_threads(workers as i32) };
 }
 
-fn flint_mul(left: &Integer, right: &Integer) -> Integer {
+pub fn use_workers(workers: usize) {
+    unsafe { flint3_sys::flint_reset_num_workers(workers.saturating_sub(1) as i32) };
+}
+
+pub fn end_thread() {
+    unsafe { flint3_sys::flint_cleanup() };
+}
+
+fn flint_mul(left: &Integer, right: &Integer, workers: usize) -> Integer {
+    use_workers(workers);
     let (left, right) = if left.significant_bits() >= right.significant_bits() {
         (left, right)
     } else {
@@ -108,12 +135,20 @@ fn flint_mul(left: &Integer, right: &Integer) -> Integer {
     out
 }
 
-pub fn multiply(left: &Integer, right: &Integer) -> Integer {
+pub fn multiply_with_workers(left: &Integer, right: &Integer, workers: usize) -> Integer {
     if left.significant_bits().max(right.significant_bits()) >= 50_000 {
-        flint_mul(left, right)
+        flint_mul(left, right, workers)
     } else {
         Integer::from(left * right)
     }
+}
+
+pub fn multiply(left: &Integer, right: &Integer) -> Integer {
+    multiply_with_workers(
+        left,
+        right,
+        std::thread::available_parallelism().map_or(1, usize::from),
+    )
 }
 
 pub fn divide(left: &Integer, right: &Integer) -> Integer {
@@ -151,4 +186,18 @@ pub fn decimal_string(value: &Integer) -> String {
         flint3_sys::flint_free(text.cast());
         out
     }
+}
+
+pub fn sqrt_10005(bits: u32, workers: usize) -> Integer {
+    use_workers(workers);
+    let mut value: flint3_sys::arb_struct = unsafe { std::mem::zeroed() };
+    let mut root = Fmpz::new();
+    unsafe {
+        flint3_sys::arb_init(&mut value);
+        flint3_sys::arb_sqrt_ui(&mut value, 10_005, i64::from(bits) + 128);
+        flint3_sys::arb_mul_2exp_si(&mut value, &value, i64::from(bits));
+        flint3_sys::arf_get_fmpz(root.0.as_mut_ptr(), flint3_sys::arb_mid_ptr(&mut value), 0);
+        flint3_sys::arb_clear(&mut value);
+    }
+    root.to_integer()
 }
