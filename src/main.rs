@@ -90,7 +90,14 @@ fn main() -> io::Result<()> {
             process::exit(1);
         };
         let conversion = decimal::Conversion::new(conversion_digits, workers);
-        let bits = conversion.fraction_bits();
+        let bits = conversion.try_fraction_bits().and_then(|bits| {
+            bits.checked_add(128)
+                .and_then(|with_margin| i64::try_from(with_margin).ok().map(|_| bits))
+        });
+        let Some(bits) = bits else {
+            eprintln!("error: digit count exceeds this platform's addressable precision");
+            process::exit(1);
+        };
         let (pi, bits, limit, powers) = thread::scope(|scope| {
             let powers = scope.spawn(|| {
                 let powers = conversion.powers();

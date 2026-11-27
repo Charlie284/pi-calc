@@ -138,9 +138,15 @@ pub fn end_thread() {
     unsafe { flint3_sys::flint_cleanup() };
 }
 
+fn bit_width_upper(value: &Integer) -> usize {
+    // Limb width is a cheap upper bound and, unlike rug::Integer::significant_bits,
+    // is not limited to u32 bits.
+    value.as_limbs().len() * 64
+}
+
 fn flint_mul(left: &Integer, right: &Integer, workers: usize) -> Integer {
     use_workers(workers);
-    let (left, right) = if left.significant_bits() >= right.significant_bits() {
+    let (left, right) = if bit_width_upper(left) >= bit_width_upper(right) {
         (left, right)
     } else {
         (right, left)
@@ -183,7 +189,7 @@ fn flint_mul(left: &Integer, right: &Integer, workers: usize) -> Integer {
 }
 
 pub fn multiply_with_workers(left: &Integer, right: &Integer, workers: usize) -> Integer {
-    if left.significant_bits().max(right.significant_bits()) >= 50_000 {
+    if bit_width_upper(left).max(bit_width_upper(right)) >= 50_000 {
         flint_mul(left, right, workers)
     } else {
         Integer::from(left * right)
@@ -200,7 +206,7 @@ pub fn multiply(left: &Integer, right: &Integer) -> Integer {
 
 pub fn divide(left: &Integer, right: &Integer) -> Integer {
     use_workers(std::thread::available_parallelism().map_or(1, usize::from));
-    if left.significant_bits() < 50_000 {
+    if bit_width_upper(left) < 50_000 {
         return Integer::from(left / right);
     }
     let numerator = Fmpz::from_integer(left);

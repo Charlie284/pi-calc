@@ -8,29 +8,48 @@ pub struct Factor {
 
 // P is odd, so only odd factors of Q can cancel. Store the least prime
 // divisor of each odd composite. A zero entry represents a prime (or 1).
-pub struct Sieve(Vec<u16>);
+// Sixteen bits are enough for ordinary sizes; thirty-two bits cover every
+// input representable with usize term indexes on supported platforms.
+enum SieveSlots {
+    Small(Vec<u16>),
+    Large(Vec<u32>),
+}
+
+pub struct Sieve(SieveSlots);
 
 impl Sieve {
     pub fn new(max: usize) -> Self {
-        let mut least = vec![0; max / 2 + 1];
-        let mut p = 3;
-        while p <= max / p {
-            if least[p / 2] == 0 {
-                for n in (p * p..=max).step_by(2 * p) {
-                    let slot = &mut least[n / 2];
-                    if *slot == 0 {
-                        *slot = p as u16;
+        macro_rules! fill {
+            ($ty:ty) => {{
+                let mut least = vec![0 as $ty; max / 2 + 1];
+                let mut p = 3usize;
+                while p <= max / p {
+                    if least[p / 2] == 0 {
+                        for n in (p * p..=max).step_by(2 * p) {
+                            let slot = &mut least[n / 2];
+                            if *slot == 0 {
+                                *slot = p as $ty;
+                            }
+                        }
                     }
+                    p += 2;
                 }
-            }
-            p += 2;
+                least
+            }};
         }
-        Self(least)
+        if max <= (u16::MAX as usize) * (u16::MAX as usize) {
+            Self(SieveSlots::Small(fill!(u16)))
+        } else {
+            Self(SieveSlots::Large(fill!(u32)))
+        }
     }
 
     pub fn factor(&self, mut odd: usize, exponent: usize, factors: &mut Vec<Factor>) {
         while odd > 1 {
-            let least = self.0[odd / 2] as usize;
+            let least = match &self.0 {
+                SieveSlots::Small(slots) => slots[odd / 2] as usize,
+                SieveSlots::Large(slots) => slots[odd / 2] as usize,
+            };
             if least == 0 {
                 factors.push(Factor {
                     prime: odd,

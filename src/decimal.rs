@@ -33,15 +33,19 @@ impl Conversion {
         }
     }
 
-    pub fn limbs(self, level: u32) -> usize {
+    fn try_limbs(self, level: u32) -> Option<usize> {
         self.chunk_limbs
             .checked_shl(level)
             .and_then(|limbs| limbs.checked_add(FRACTION_GUARD_LIMBS))
+    }
+
+    pub fn limbs(self, level: u32) -> usize {
+        self.try_limbs(level)
             .expect("digit count exceeds addressable precision")
     }
 
-    pub fn fraction_bits(self) -> usize {
-        64 * self.limbs(self.levels)
+    pub fn try_fraction_bits(self) -> Option<usize> {
+        64usize.checked_mul(self.try_limbs(self.levels)?)
     }
 
     pub fn capacity(self) -> usize {
@@ -163,7 +167,9 @@ mod tests {
 
     #[test]
     fn precision_is_not_truncated_at_u32_boundary() {
-        let bits = Conversion::new(1_300_000_000, 1).fraction_bits();
+        let bits = Conversion::new(1_300_000_000, 1)
+            .try_fraction_bits()
+            .unwrap();
         assert!(bits > u32::MAX as usize);
     }
 }
