@@ -10,6 +10,9 @@ use std::process;
 use std::thread;
 use std::time::Instant;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "\
 pi-calc — compute pi to arbitrary precision
 
@@ -74,27 +77,43 @@ fn main() -> io::Result<()> {
     let (digits, quiet) = parse_args();
     let start = Instant::now();
     let workers = thread::available_parallelism().map_or(1, usize::from);
+    flint::use_mimalloc();
     flint::set_workers(workers);
     let mut guard = 16;
-    let (whole, blocks, elapsed, limit) = loop {
+    let (whole, text, elapsed, limit) = loop {
         let scale = digits + 2 * guard;
-        let (pi, bits, limit) = chudnovsky::pi_fixed(scale, workers);
+        let conversion = decimal::Conversion::new((digits + guard) as usize, workers);
+        let bits = conversion.fraction_bits();
+        let (pi, bits, limit, powers) = thread::scope(|scope| {
+            let powers = scope.spawn(|| {
+                let powers = conversion.powers();
+                flint::end_thread();
+                powers
+            });
+            let (pi, bits, limit) = chudnovsky::pi_fixed(scale, bits, workers);
+            (
+                pi,
+                bits,
+                limit,
+                powers.join().expect("decimal powers thread panicked"),
+            )
+        });
         let elapsed = start.elapsed();
         if env::var_os("PI_CALC_PROFILE").is_some() {
             eprintln!("profile: fixed-point total {elapsed:?}");
         }
         let conversion_start = Instant::now();
         let whole = Integer::from(&pi >> bits);
-        let mut blocks = decimal::convert(pi.keep_bits(bits), bits, digits + guard, workers);
+        let mut text = decimal::convert(&pi, conversion, &powers, workers);
+        text.truncate((digits + guard) as usize);
         if env::var_os("PI_CALC_PROFILE").is_some() {
             eprintln!(
                 "profile: decimal conversion {:?}",
                 conversion_start.elapsed()
             );
         }
-        let last = blocks.last_mut().unwrap();
-        let end = last.len() - guard as usize;
-        let suffix = &last.as_bytes()[end..];
+        let end = text.len() - guard as usize;
+        let suffix = &text.as_bytes()[end..];
 
         // The fixed-point error is below two ulps. If the guard digits
         // place the result near either truncation boundary, try more bits.
@@ -102,16 +121,13 @@ fn main() -> io::Result<()> {
             guard += 16;
             continue;
         }
-        last.truncate(end);
-        break (whole, blocks, elapsed, limit);
+        text.truncate(end);
+        break (whole, text, elapsed, limit);
     };
 
     let mut out = io::stdout().lock();
     write!(out, "{whole}.")?;
-    for block in blocks {
-        out.write_all(block.as_bytes())?;
-    }
-    writeln!(out)?;
+    writeln!(out, "{text}")?;
 
     if !quiet {
         eprintln!(

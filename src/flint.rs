@@ -1,3 +1,4 @@
+use libmimalloc_sys as mi;
 use rug::Integer;
 use std::ffi::{c_void, CStr};
 use std::os::raw::{c_char, c_int, c_long};
@@ -61,11 +62,84 @@ impl Drop for Fmpz {
     }
 }
 
+unsafe extern "C" fn mi_calloc_compat(count: usize, size: usize) -> *mut c_void {
+    match count.checked_mul(size) {
+        Some(bytes) => mi::mi_zalloc(bytes),
+        None => std::process::abort(),
+    }
+}
+
+unsafe extern "C" fn mi_aligned_alloc_compat(alignment: usize, size: usize) -> *mut c_void {
+    mi::mi_malloc_aligned(size, alignment)
+}
+
+extern "C" fn gmp_alloc(size: usize) -> *mut c_void {
+    let ptr = unsafe { mi::mi_malloc(size) };
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    ptr
+}
+
+unsafe extern "C" fn gmp_realloc(ptr: *mut c_void, _old: usize, new: usize) -> *mut c_void {
+    let ptr = unsafe { mi::mi_realloc(ptr, new) };
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    ptr
+}
+
+unsafe extern "C" fn gmp_free(ptr: *mut c_void, _size: usize) {
+    unsafe { mi::mi_free(ptr) }
+}
+
+pub fn use_mimalloc() {
+    unsafe {
+        gmp_mpfr_sys::gmp::set_memory_functions(Some(gmp_alloc), Some(gmp_realloc), Some(gmp_free));
+        flint3_sys::__flint_set_all_memory_functions(
+            Some(mi::mi_malloc),
+            Some(mi_calloc_compat),
+            Some(mi::mi_realloc),
+            Some(mi::mi_free),
+            Some(mi_aligned_alloc_compat),
+            Some(mi::mi_free),
+        );
+    }
+}
+
+pub fn drop_low_limbs(value: &Integer, limbs: usize) -> Integer {
+    nonnegative_from_limbs(value.as_limbs().get(limbs..).unwrap_or_default())
+}
+
+pub fn nonnegative_from_limbs(limbs: &[u64]) -> Integer {
+    let used = limbs.len() - limbs.iter().rev().take_while(|&&limb| limb == 0).count();
+    if used == 0 {
+        return Integer::new();
+    }
+    let len = used;
+    let mut out = Integer::with_capacity(len * 64);
+    unsafe {
+        let raw = &mut *out.as_raw_mut().cast::<MpzRaw>();
+        std::ptr::copy_nonoverlapping(limbs.as_ptr(), raw.limbs, used);
+        raw.size = len as c_int;
+    }
+    out
+}
+
 pub fn set_workers(workers: usize) {
     unsafe { flint3_sys::flint_set_num_threads(workers as i32) };
 }
 
-fn flint_mul(left: &Integer, right: &Integer) -> Integer {
+pub fn use_workers(workers: usize) {
+    unsafe { flint3_sys::flint_reset_num_workers(workers.saturating_sub(1) as i32) };
+}
+
+pub fn end_thread() {
+    unsafe { flint3_sys::flint_cleanup() };
+}
+
+fn flint_mul(left: &Integer, right: &Integer, workers: usize) -> Integer {
+    use_workers(workers);
     let (left, right) = if left.significant_bits() >= right.significant_bits() {
         (left, right)
     } else {
@@ -108,15 +182,24 @@ fn flint_mul(left: &Integer, right: &Integer) -> Integer {
     out
 }
 
-pub fn multiply(left: &Integer, right: &Integer) -> Integer {
+pub fn multiply_with_workers(left: &Integer, right: &Integer, workers: usize) -> Integer {
     if left.significant_bits().max(right.significant_bits()) >= 50_000 {
-        flint_mul(left, right)
+        flint_mul(left, right, workers)
     } else {
         Integer::from(left * right)
     }
 }
 
+pub fn multiply(left: &Integer, right: &Integer) -> Integer {
+    multiply_with_workers(
+        left,
+        right,
+        std::thread::available_parallelism().map_or(1, usize::from),
+    )
+}
+
 pub fn divide(left: &Integer, right: &Integer) -> Integer {
+    use_workers(std::thread::available_parallelism().map_or(1, usize::from));
     if left.significant_bits() < 50_000 {
         return Integer::from(left / right);
     }
@@ -151,4 +234,18 @@ pub fn decimal_string(value: &Integer) -> String {
         flint3_sys::flint_free(text.cast());
         out
     }
+}
+
+pub fn sqrt_10005(bits: u32, workers: usize) -> Integer {
+    use_workers(workers);
+    let mut value: flint3_sys::arb_struct = unsafe { std::mem::zeroed() };
+    let mut root = Fmpz::new();
+    unsafe {
+        flint3_sys::arb_init(&mut value);
+        flint3_sys::arb_sqrt_ui(&mut value, 10_005, i64::from(bits) + 128);
+        flint3_sys::arb_mul_2exp_si(&mut value, &value, i64::from(bits));
+        flint3_sys::arf_get_fmpz(root.0.as_mut_ptr(), flint3_sys::arb_mid_ptr(&mut value), 0);
+        flint3_sys::arb_clear(&mut value);
+    }
+    root.to_integer()
 }

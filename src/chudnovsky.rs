@@ -51,7 +51,10 @@ fn split_small(
         }
         let product = u128::from(parts[0]) * u128::from(parts[1]) * u128::from(parts[2]);
         let p = Integer::from(product);
-        let mut t: Integer = (&p * (A * k + B)).into();
+        let linear = u128::from(A * k + B);
+        let mut t = product
+            .checked_mul(linear)
+            .map_or_else(|| Integer::from(product) * (A * k + B), Integer::from);
         if lo % 2 == 1 {
             t = -t;
         }
@@ -61,8 +64,12 @@ fn split_small(
         if let Some(q_factors) = q_factors {
             sieve.factor(odd as u32, 3, q_factors);
         }
-        let mut q_odd = Integer::from(u128::from(odd).pow(3));
-        q_odd *= C3_OVER_24 >> Q_SHIFT;
+        let odd_cubed = u128::from(odd).pow(3);
+        let odd_constant = u128::from(C3_OVER_24 >> Q_SHIFT);
+        let q_odd = odd_cubed.checked_mul(odd_constant).map_or_else(
+            || Integer::from(odd_cubed) * (C3_OVER_24 >> Q_SHIFT),
+            Integer::from,
+        );
         return Pqt {
             p,
             q_odd,
@@ -74,11 +81,19 @@ fn split_small(
     let mid = lo + (hi - lo) / 2;
     let left = split_small(lo, mid, sieve, p_factors, q_factors, true);
     let right = split_small(mid, hi, sieve, p_factors, q_factors, need_p);
-    combine(left, right, need_p, 0)
+    combine(left, right, need_p, 1)
 }
 
-fn split(lo: u32, hi: u32, depth: u32, sieve: &Sieve, need_p: bool) -> Factored {
-    if hi - lo <= 16 {
+fn split(
+    lo: u32,
+    hi: u32,
+    level: u32,
+    parallel_depth: u32,
+    workers: usize,
+    sieve: &Sieve,
+    need_p: bool,
+) -> Factored {
+    if hi - lo <= 64 {
         let mut p = Vec::with_capacity(4 * (hi - lo) as usize);
         // The leftmost ranges are never used as a right operand.
         let mut q = (lo != 0).then(|| Vec::with_capacity(7 * (hi - lo) as usize));
@@ -93,39 +108,45 @@ fn split(lo: u32, hi: u32, depth: u32, sieve: &Sieve, need_p: bool) -> Factored 
     }
 
     let mid = lo + (hi - lo) / 2;
-    let parallel = depth > 0 && hi - lo >= 2_048;
+    let parallel = level < parallel_depth && hi - lo >= 2_048;
+    let next = level + 1;
     let (left, right) = if parallel {
         thread::scope(|scope| {
-            let left = scope.spawn(|| split(lo, mid, depth - 1, sieve, true));
-            let right = split(mid, hi, depth - 1, sieve, need_p);
+            let left = scope.spawn(|| {
+                let value = split(lo, mid, next, parallel_depth, workers, sieve, true);
+                flint::end_thread();
+                value
+            });
+            let right = split(mid, hi, next, parallel_depth, workers, sieve, need_p);
             (left.join().expect("split thread panicked"), right)
         })
     } else {
         (
-            split(lo, mid, 0, sieve, true),
-            split(mid, hi, 0, sieve, need_p),
+            split(lo, mid, next, parallel_depth, workers, sieve, true),
+            split(mid, hi, next, parallel_depth, workers, sieve, need_p),
         )
     };
     let (mut left, mut right) = (left, right);
-    let divisor = factors::cancel(&mut left.p, &mut right.q);
-    if divisor != 1 {
-        left.value.p.div_exact_mut(&divisor);
-        right.value.q_odd.div_exact_mut(&divisor);
+    // Near the root the exact divisions and factor bookkeeping cost more
+    // time than the slightly smaller multiplication operands save.
+    if level >= 4 {
+        let divisor = factors::cancel(&mut left.p, &mut right.q);
+        if divisor != 1 {
+            left.value.p.div_exact_mut(&divisor);
+            right.value.q_odd.div_exact_mut(&divisor);
+        }
     }
 
     Factored {
-        value: combine(
-            left.value,
-            right.value,
-            need_p,
-            if hi - lo >= 100_000 { depth } else { 0 },
-        ),
-        p: if need_p {
+        value: combine(left.value, right.value, need_p, (workers >> level).max(1)),
+        // Factor lists have no consumer above level four, so do not merge
+        // them through the top of the tree only to drop them there.
+        p: if need_p && level >= 5 {
             factors::merge(&left.p, &right.p)
         } else {
             Vec::new()
         },
-        q: if lo > 0 {
+        q: if lo > 0 && level >= 5 {
             factors::merge(&left.q, &right.q)
         } else {
             Vec::new()
@@ -133,46 +154,16 @@ fn split(lo: u32, hi: u32, depth: u32, sieve: &Sieve, need_p: bool) -> Factored 
     }
 }
 
-fn combine(left: Pqt, right: Pqt, need_p: bool, depth: u32) -> Pqt {
-    let (t, p, q_odd) = if depth > 0 {
-        // The children have joined, so these products can reuse their workers.
-        thread::scope(|scope| {
-            let first = scope.spawn(|| {
-                let mut term = flint::multiply(&left.t, &right.q_odd);
-                term <<= right.q_shift;
-                term
-            });
-            let second = || flint::multiply(&left.p, &right.t);
-            let products = || {
-                let q = flint::multiply(&left.q_odd, &right.q_odd);
-                let p = if need_p {
-                    flint::multiply(&left.p, &right.p)
-                } else {
-                    Integer::new()
-                };
-                (p, q)
-            };
-            if depth > 1 {
-                let second = scope.spawn(second);
-                let (p, q) = products();
-                (first.join().unwrap() + second.join().unwrap(), p, q)
-            } else {
-                let second = second();
-                let (p, q) = products();
-                (first.join().unwrap() + second, p, q)
-            }
-        })
+fn combine(left: Pqt, right: Pqt, need_p: bool, workers: usize) -> Pqt {
+    let mut t = flint::multiply_with_workers(&left.t, &right.q_odd, workers);
+    t <<= right.q_shift;
+    t += flint::multiply_with_workers(&left.p, &right.t, workers);
+    let p = if need_p {
+        flint::multiply_with_workers(&left.p, &right.p, workers)
     } else {
-        let mut t = flint::multiply(&left.t, &right.q_odd);
-        t <<= right.q_shift;
-        t += flint::multiply(&left.p, &right.t);
-        let p = if need_p {
-            flint::multiply(&left.p, &right.p)
-        } else {
-            Integer::new()
-        };
-        (t, p, flint::multiply(&left.q_odd, &right.q_odd))
+        Integer::new()
     };
+    let q_odd = flint::multiply_with_workers(&left.q_odd, &right.q_odd, workers);
     Pqt {
         p,
         q_odd,
@@ -185,21 +176,20 @@ fn split_depth(workers: usize) -> u32 {
     if workers <= 1 {
         0
     } else {
-        (workers - 1).ilog2() + 1
+        workers.next_power_of_two().trailing_zeros() + 1
     }
 }
 
-pub fn pi_fixed(scale: u32, workers: usize) -> (Integer, u32, u32) {
-    let bits = (f64::from(scale) * 10.0_f64.log2()).ceil() as u32;
+pub fn pi_fixed(scale: u32, bits: u32, workers: usize) -> (Integer, u32, u32) {
     // The extra terms put the series tail below one binary ulp.
     let limit = (f64::from(scale) / 14.181).ceil() as u32 + 2;
     let split = |workers: usize| {
         let sieve = Sieve::new(6 * (limit - 1) - 1);
-        split(0, limit, split_depth(workers), &sieve, false).value
+        split(0, limit, 0, split_depth(workers), workers, &sieve, false).value
     };
     let sqrt = || {
         let start = Instant::now();
-        let root = (Integer::from(10005u32) << (2 * bits)).sqrt();
+        let root = flint::sqrt_10005(bits, workers);
         if env::var_os("PI_CALC_PROFILE").is_some() {
             eprintln!("profile: square root {:?}", start.elapsed());
         }
@@ -208,7 +198,11 @@ pub fn pi_fixed(scale: u32, workers: usize) -> (Integer, u32, u32) {
     let split_start = Instant::now();
     let (series, root) = if bits >= 330_000 && workers > 1 {
         thread::scope(|scope| {
-            let root = scope.spawn(sqrt);
+            let root = scope.spawn(|| {
+                let root = sqrt();
+                flint::end_thread();
+                root
+            });
             (split(workers - 1), root.join().unwrap())
         })
     } else {
@@ -219,10 +213,22 @@ pub fn pi_fixed(scale: u32, workers: usize) -> (Integer, u32, u32) {
     }
 
     let finalize_start = Instant::now();
+    let mut q = series.q_odd;
+    q <<= series.q_shift;
+    let mut t = series.t;
+    let length = t.as_limbs().len();
+    let keep = bits as usize / 64 + 3;
+    // Three limbs beyond the output precision are enough: truncating both
+    // operands by the same power of two changes the quotient by far less
+    // than the fixed-point errors already bounded by the guard digits.
+    if length > keep {
+        let cut = length - keep;
+        q = flint::drop_low_limbs(&q, cut);
+        t = flint::drop_low_limbs(&t, cut);
+    }
     let mut pi = root * 426880u32;
-    pi = flint::multiply(&pi, &series.q_odd);
-    pi <<= series.q_shift;
-    pi = flint::divide(&pi, &series.t);
+    pi = flint::multiply(&pi, &q);
+    pi = flint::divide(&pi, &t);
     if env::var_os("PI_CALC_PROFILE").is_some() {
         eprintln!(
             "profile: final multiplication and division {:?}",
@@ -239,7 +245,7 @@ mod tests {
     #[test]
     fn split_depth_supports_one_worker() {
         assert_eq!(split_depth(1), 0);
-        assert_eq!(split_depth(2), 1);
-        assert_eq!(split_depth(3), 2);
+        assert_eq!(split_depth(2), 2);
+        assert_eq!(split_depth(3), 3);
     }
 }

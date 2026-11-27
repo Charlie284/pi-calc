@@ -12,4 +12,7 @@ categories = ["command-line-utilities", "mathematics", "science"]
 
 [dependencies]
 flint3-sys = { version = "3.6.1", features = ["gmp-mpfr-sys"] }
+gmp-mpfr-sys = "1.7.1"
+libmimalloc-sys = "0.1"
+mimalloc = "0.1"
 rug = { version = "1.24", features = ["integer"] }
