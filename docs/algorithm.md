@@ -75,12 +75,17 @@ FLINT's Newton square root runs alongside the series. The series
 alternates, with \(|T_1/T_0| < 2\cdot10^{-14}\) and
 \(|T_k/T_{k-1}| < 10^{-14.181}\) for \(k\ge2\). The first omitted term
 bounds the tail, so the two extra terms put the resulting error in pi
-well below one binary unit at the requested precision plus guard digits. The root loses less than one unit before
-multiplication by \(426880Q/T < 0.032\), and the final division loses
-less than one unit. Before division, Q and T are both truncated past three
-limbs beyond the output precision; that common rescaling changes the quotient
-by orders of magnitude less than one ulp. Together, these bounds put \(x\)
-within two units of \(\pi\cdot 2^b\).
+well below one binary unit at the requested precision plus guard digits.
+The root loses less than one unit before multiplication by
+\(426880Q/T < 0.032\), and the final division loses less than one unit.
+Before division, Q and T are both truncated past three limbs beyond the
+output precision; that common rescaling changes the quotient by orders of
+magnitude less than one ulp. Together, these bounds keep the error below
+two units in the bit position corresponding to the requested precision plus
+guard digits. If the limb-aligned scale \(b\) is larger than that requested
+precision, the additional low bits are representation padding. They make
+chunk extraction cheaper, but the series-tail bound is not claimed at that
+padded scale.
 
 Decimal conversion uses a parallel binary tree. The output is divided into
 fixed-width chunks and the powers \(10^k,10^{2k},10^{4k},\ldots\) are
