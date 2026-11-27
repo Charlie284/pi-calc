@@ -1,3 +1,4 @@
+use libmimalloc_sys as mi;
 use rug::Integer;
 use std::ffi::{c_void, CStr};
 use std::os::raw::{c_char, c_int, c_long};
@@ -59,6 +60,55 @@ impl Drop for Fmpz {
     fn drop(&mut self) {
         unsafe { flint3_sys::fmpz_clear(self.0.as_mut_ptr()) };
     }
+}
+
+unsafe extern "C" fn mi_calloc_compat(count: usize, size: usize) -> *mut c_void {
+    match count.checked_mul(size) {
+        Some(bytes) => mi::mi_zalloc(bytes),
+        None => std::process::abort(),
+    }
+}
+
+unsafe extern "C" fn mi_aligned_alloc_compat(alignment: usize, size: usize) -> *mut c_void {
+    mi::mi_malloc_aligned(size, alignment)
+}
+
+extern "C" fn gmp_alloc(size: usize) -> *mut c_void {
+    let ptr = unsafe { mi::mi_malloc(size) };
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    ptr
+}
+
+unsafe extern "C" fn gmp_realloc(ptr: *mut c_void, _old: usize, new: usize) -> *mut c_void {
+    let ptr = unsafe { mi::mi_realloc(ptr, new) };
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    ptr
+}
+
+unsafe extern "C" fn gmp_free(ptr: *mut c_void, _size: usize) {
+    unsafe { mi::mi_free(ptr) }
+}
+
+pub fn use_mimalloc() {
+    unsafe {
+        gmp_mpfr_sys::gmp::set_memory_functions(Some(gmp_alloc), Some(gmp_realloc), Some(gmp_free));
+        flint3_sys::__flint_set_all_memory_functions(
+            Some(mi::mi_malloc),
+            Some(mi_calloc_compat),
+            Some(mi::mi_realloc),
+            Some(mi::mi_free),
+            Some(mi_aligned_alloc_compat),
+            Some(mi::mi_free),
+        );
+    }
+}
+
+pub fn drop_low_limbs(value: &Integer, limbs: usize) -> Integer {
+    nonnegative_from_limbs(0, value.as_limbs().get(limbs..).unwrap_or_default())
 }
 
 pub fn nonnegative_from_limbs(zeros: usize, limbs: &[u64]) -> Integer {
@@ -152,6 +202,7 @@ pub fn multiply(left: &Integer, right: &Integer) -> Integer {
 }
 
 pub fn divide(left: &Integer, right: &Integer) -> Integer {
+    use_workers(std::thread::available_parallelism().map_or(1, usize::from));
     if left.significant_bits() < 50_000 {
         return Integer::from(left / right);
     }

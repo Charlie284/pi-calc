@@ -67,10 +67,6 @@ fn pow10(exponent: u32) -> Integer {
     pow5(exponent) << exponent
 }
 
-fn drop_low_limbs(value: &Integer, limbs: usize) -> Integer {
-    flint::nonnegative_from_limbs(0, value.as_limbs().get(limbs..).unwrap_or_default())
-}
-
 fn worker<T>(work: impl FnOnce() -> T) -> T {
     let value = work();
     flint::end_thread();
@@ -92,6 +88,10 @@ fn join<L: Send, R: Send>(
     })
 }
 
+// Writes `out` with the leading decimal digits of a binary fraction. Each
+// level multiplies once by a precomputed power of ten to separate the lower
+// half of the digits; the two halves then convert independently. The buffer
+// is prefilled with zeroes, so short converted integers leave leading zeroes.
 fn write_fraction(
     fraction: Integer,
     level: u32,
@@ -103,14 +103,14 @@ fn write_fraction(
     let limbs = conversion.limbs(level);
     if level == 0 {
         let shifted = flint::multiply_with_workers(&fraction, &powers[0], workers);
-        let digits = flint::decimal_string(&drop_low_limbs(&shifted, limbs));
+        let digits = flint::decimal_string(&flint::drop_low_limbs(&shifted, limbs));
         let padding = out.len() - digits.len();
         out[padding..].copy_from_slice(digits.as_bytes());
         return;
     }
 
     let dropped = limbs - conversion.limbs(level - 1);
-    let upper = drop_low_limbs(&fraction, dropped);
+    let upper = flint::drop_low_limbs(&fraction, dropped);
     let shifted = flint::multiply_with_workers(&fraction, &powers[level as usize - 1], workers);
     drop(fraction);
     let shifted_limbs = shifted.as_limbs();

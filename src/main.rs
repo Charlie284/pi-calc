@@ -10,6 +10,9 @@ use std::process;
 use std::thread;
 use std::time::Instant;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "\
 pi-calc — compute pi to arbitrary precision
 
@@ -74,6 +77,7 @@ fn main() -> io::Result<()> {
     let (digits, quiet) = parse_args();
     let start = Instant::now();
     let workers = thread::available_parallelism().map_or(1, usize::from);
+    flint::use_mimalloc();
     flint::set_workers(workers);
     let mut guard = 16;
     let (whole, text, elapsed, limit) = loop {
@@ -81,7 +85,11 @@ fn main() -> io::Result<()> {
         let conversion = decimal::Conversion::new((digits + guard) as usize, workers);
         let bits = conversion.fraction_bits();
         let (pi, bits, limit, powers) = thread::scope(|scope| {
-            let powers = scope.spawn(|| conversion.powers());
+            let powers = scope.spawn(|| {
+                let powers = conversion.powers();
+                flint::end_thread();
+                powers
+            });
             let (pi, bits, limit) = chudnovsky::pi_fixed(scale, bits, workers);
             (
                 pi,

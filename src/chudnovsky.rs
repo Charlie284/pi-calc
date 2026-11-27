@@ -127,6 +127,8 @@ fn split(
         )
     };
     let (mut left, mut right) = (left, right);
+    // Near the root the exact divisions and factor bookkeeping cost more
+    // time than the slightly smaller multiplication operands save.
     if level >= 4 {
         let divisor = factors::cancel(&mut left.p, &mut right.q);
         if divisor != 1 {
@@ -137,6 +139,8 @@ fn split(
 
     Factored {
         value: combine(left.value, right.value, need_p, (workers >> level).max(1)),
+        // Factor lists have no consumer above level four, so do not merge
+        // them through the top of the tree only to drop them there.
         p: if need_p && level >= 5 {
             factors::merge(&left.p, &right.p)
         } else {
@@ -194,7 +198,11 @@ pub fn pi_fixed(scale: u32, bits: u32, workers: usize) -> (Integer, u32, u32) {
     let split_start = Instant::now();
     let (series, root) = if bits >= 330_000 && workers > 1 {
         thread::scope(|scope| {
-            let root = scope.spawn(sqrt);
+            let root = scope.spawn(|| {
+                let root = sqrt();
+                flint::end_thread();
+                root
+            });
             (split(workers - 1), root.join().unwrap())
         })
     } else {
@@ -204,19 +212,23 @@ pub fn pi_fixed(scale: u32, bits: u32, workers: usize) -> (Integer, u32, u32) {
         eprintln!("profile: binary splitting {:?}", split_start.elapsed());
     }
 
-    if env::var_os("PI_CALC_PROFILE").is_some() {
-        eprintln!(
-            "profile: operand bits q {} t {} target {}",
-            series.q_odd.significant_bits(),
-            series.t.significant_bits(),
-            bits
-        );
-    }
     let finalize_start = Instant::now();
+    let mut q = series.q_odd;
+    q <<= series.q_shift;
+    let mut t = series.t;
+    let length = t.as_limbs().len();
+    let keep = bits as usize / 64 + 3;
+    // Three limbs beyond the output precision are enough: truncating both
+    // operands by the same power of two changes the quotient by far less
+    // than the fixed-point errors already bounded by the guard digits.
+    if length > keep {
+        let cut = length - keep;
+        q = flint::drop_low_limbs(&q, cut);
+        t = flint::drop_low_limbs(&t, cut);
+    }
     let mut pi = root * 426880u32;
-    pi = flint::multiply(&pi, &series.q_odd);
-    pi <<= series.q_shift;
-    pi = flint::divide(&pi, &series.t);
+    pi = flint::multiply(&pi, &q);
+    pi = flint::divide(&pi, &t);
     if env::var_os("PI_CALC_PROFILE").is_some() {
         eprintln!(
             "profile: final multiplication and division {:?}",

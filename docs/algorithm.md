@@ -52,10 +52,13 @@ If \(g\) divides both \(P_1\) and \(Q_2\), it divides all three merge
 results. The implementation divides those two inputs by \(g\) before
 multiplying, preserving \(P/Q\) and \(T/Q\) while keeping the operands
 smaller. A sieve supplies odd prime factors, which are collected once per
-small group of terms and merged in sorted order. Since \(P\) is always odd,
-powers of two in \(Q\) are kept as a shift count. The two halves of large
-ranges and the biggest independent merge products run on bounded scoped
-threads. See [Bellard's description of factor cancellation](https://bellard.org/pi/pi2700e9/pipcrecord.pdf).
+64-term block and merged in sorted order. Since \(P\) is always odd,
+powers of two in \(Q\) are kept as a shift count. Cancellation is used only
+below the top few levels of the tree; near the root, exact division and factor
+bookkeeping cost more than the extra operand reduction saves. The two halves
+of large ranges run on bounded scoped threads. Inside a merge the products run
+one at a time with a bounded share of FLINT workers, which avoids oversubscribing
+the FFT thread pool. See [Bellard's description of factor cancellation](https://bellard.org/pi/pi2700e9/pipcrecord.pdf).
 
 ## Precision and output
 
@@ -68,19 +71,24 @@ x =
 \right\rfloor.
 \]
 
-The integer square root can run alongside the series. The series
+FLINT's Newton square root runs alongside the series. The series
 alternates, with \(|T_1/T_0| < 2\cdot10^{-14}\) and
 \(|T_k/T_{k-1}| < 10^{-14.181}\) for \(k\ge2\). The first omitted term
 bounds the tail, so the two extra terms put the resulting error in pi
 well below one binary unit. The root loses less than one unit before
 multiplication by \(426880Q/T < 0.032\), and the final division loses
-less than one unit. Together, these bounds put \(x\) within two units
-of \(\pi\cdot 2^b\).
+less than one unit. Before division, Q and T are both truncated past three
+limbs beyond the output precision; that common rescaling changes the quotient
+by orders of magnitude less than one ulp. Together, these bounds put \(x\)
+within two units of \(\pi\cdot 2^b\).
 
-For decimal conversion, multiplying the remaining fraction by \(5^k\)
-and moving its binary point by \(k\) extracts the next \(k\) decimal
-digits. FLINT converts large extracted integers while the remaining fraction
-is processed in parallel. Blocks are zero-padded to their fixed widths.
+Decimal conversion uses a parallel binary tree. The output is divided into
+fixed-width chunks and the powers \(10^k,10^{2k},10^{4k},\ldots\) are
+computed once, overlapping the series. At each tree level, multiplication by
+the appropriate power separates the lower half of the remaining digits without
+division; the upper and lower halves then convert independently. FLINT's radix
+conversion formats the extracted integers, and chunks are zero-padded to their
+fixed widths.
 
 The first pass uses 32 decimal digits' worth of extra binary precision
 and checks 16 extra decimal digits before truncating. A suffix of all
@@ -105,4 +113,6 @@ The implementation uses [GMP](https://gmplib.org/) through the
 [`rug`](https://docs.rs/rug/) crate for the series representation and small arithmetic.
 Large multiplications call FLINT's small-prime FFT directly on GMP limbs; the final division
 uses FLINT's multiplication-based Newton division, and large decimal strings use FLINT's
-radix conversion. FLINT worker threads are sized from the available parallelism.
+radix conversion. FLINT worker threads are sized from the available parallelism, with each
+concurrent task given a bounded worker share. GMP, FLINT, and Rust allocations use mimalloc,
+and FLINT thread-local FFT caches are cleaned up before worker threads exit.

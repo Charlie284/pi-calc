@@ -26,27 +26,26 @@ pi-calc -q 10000  # 10000 digits, quiet mode
 
 Uses the [Chudnovsky algorithm](https://en.wikipedia.org/wiki/Chudnovsky_algorithm), the same method used for world-record pi computations. Each iteration yields ~14.18 digits.
 
-The series is summed by binary splitting over GMP integers. The product tree cancels common
-factors before multiplication and runs independent work in parallel. Large multiplication,
-Newton division, and decimal string conversion use FLINT's vectorized and multithreaded
-arithmetic. The result is computed in binary fixed point and converted to decimal in blocks.
-See [docs/algorithm.md](docs/algorithm.md).
+The series is summed by binary splitting over GMP integers. Large multiplication, Newton
+division, square roots, and radix conversion use FLINT's vectorized and multithreaded arithmetic,
+with GMP and FLINT allocations routed through mimalloc. Decimal digits are extracted as a
+parallel binary tree using precomputed powers of ten. See [docs/algorithm.md](docs/algorithm.md).
 
 ## Performance
 
-Release-build wall time on an Apple M4 Max with Rust 1.96.1. Both builds redirected stdout
-away from the terminal. The 1 million and 10 million rows are medians of three alternating
-runs. The 100 million row is one run per version.
+Release-build wall time on an Apple M4 Max with Rust 1.96.1, with stdout redirected away
+from the terminal. Current 1 million and 10 million rows are medians of five runs. The
+100 million row is one validated run.
 
-| Decimal digits | Previous binary splitting (`9a68a2c`) | Optimized | Speedup |
+| Decimal digits | Previous binary splitting (`9a68a2c`) | Current | Speedup |
 | ---: | ---: | ---: | ---: |
-| 1,000,000 | 0.139 s | 0.086 s | 1.6× |
-| 10,000,000 | 2.43 s | 1.23 s | 2.0× |
-| 100,000,000 | 35.28 s | 14.70 s | 2.4× |
+| 1,000,000 | 0.139 s | 0.023 s | 6.0× |
+| 10,000,000 | 2.43 s | 0.217 s | 11.2× |
+| 100,000,000 | 35.28 s | 2.92 s | 12.1× |
 
-At 100 million digits, peak resident memory is 2.65 GB, down from 3.20 GB in the previous
-binary-splitting implementation. The 100 million measurement was made while the test machine
-was heavily loaded, so it is a conservative wall-clock result rather than a best-case benchmark.
+The immediately preceding FLINT integration computed 100 million digits in 7.49 s on the
+same machine, so the current pipeline is 2.6× faster than that baseline. Peak resident memory
+at 100 million digits is 2.57 GB, down from 3.20 GB in the original binary-splitting build.
 
 To measure the release build on your machine without including terminal output time:
 
